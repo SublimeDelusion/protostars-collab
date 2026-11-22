@@ -72,3 +72,5 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .todo-assignee{margin-left:auto;align-self:center;font-size:14px;min-height:38px;display:flex;align-items:center;color:var(--muted)}
 .todo-assignee .edit-pencil{opacity:1;pointer-events:auto}
 @media(max-width:480px){.todo-row{flex-wrap:wrap}.todo-assignee{margin-left:30px}}
+.pages-invite form,.pages-invite label{display:grid;gap:8px}
+.pages-invite form{gap:14px}

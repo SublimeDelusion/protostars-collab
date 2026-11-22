@@ -1,7 +1,11 @@
-# Protostars collaboration board
+# Protostars robot management
 
-FTC Team 17097’s robot debrief board. GitHub Pages publishes `main` → `/docs`.
+The robot management board provided by FTC Team 17097, Protostars. GitHub Pages publishes the public landing page and client from `main` → `/docs`.
 
-Share the GitHub Pages URL with `#invite=TEAM_INVITE_CODE` appended. The board opens directly on GitHub Pages, saves access on the device, and removes the fragment from the address bar. The frontend uses the existing hosted board API and database. Keep the real invite code out of the repository.
+Share the GitHub Pages URL with `#invite=TEAM_INVITE_CODE` appended. The backend matches the invite to one team. The frontend stays on GitHub Pages and remembers access on the device.
 
-To rebuild the frontend, run `npm install` and `npm run build`. The supplied logo is in `docs/protostars.jpg`.
+Team configuration, starter JSON, and live board data are maintained on the server. Invite values are runtime secrets. Never commit team invite values or a live board export to this public repository. **Download JSON** exports the current team board from inside the app.
+
+The request-access form is visible on the landing page. Email delivery is pending a recipient and delivery service.
+
+Rebuild the frontend with `npm install` and `npm run build`.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Board from "../app/board";
 import { INVITE_HEADER, NAME_HEADER } from "../lib/pages-origin";
@@ -9,7 +9,8 @@ const inviteKey = "protostars-invite";
 const nameKey = "protostars-name";
 
 function requestFor(key: string): typeof fetch {
-  let name = localStorage.getItem(nameKey) ?? "";
+  const teamNameKey = nameKey + ":" + key;
+  let name = localStorage.getItem(teamNameKey) ?? "";
   return async (input, init) => {
     const headers = new Headers(init?.headers);
     headers.set(INVITE_HEADER, key);
@@ -18,67 +19,87 @@ function requestFor(key: string): typeof fetch {
     const updatedName = response.headers.get(NAME_HEADER);
     if (updatedName) {
       name = updatedName;
-      localStorage.setItem(nameKey, name);
+      localStorage.setItem(teamNameKey, name);
+    } else if (!name && response.ok && (!init?.method || init.method === "GET")) {
+      const previous = localStorage.getItem(nameKey);
+      if (previous && (await response.clone().json() as { team: string }).team === "17097") {
+        name = previous;
+        localStorage.setItem(teamNameKey, name);
+      }
     }
     return response;
   };
 }
 
 function validKey(value: string | null): value is string {
-  return /^[A-Za-z0-9_-]{32}$/.test(value ?? "");
+  return /^[A-Za-z0-9_-]{32,128}$/.test(value ?? "");
 }
 
 function Pages() {
+  const connection = useRef(0);
   const [request, setRequest] = useState<typeof fetch>();
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
   const [initialKey] = useState(() => {
     const invite = new URLSearchParams(location.hash.slice(1)).get("invite");
     const saved = localStorage.getItem(inviteKey);
-    return validKey(invite) ? invite : validKey(saved) ? saved : null;
+    if (invite !== null) return validKey(invite) ? invite : null;
+    return validKey(saved) ? saved : null;
   });
+  const [busy, setBusy] = useState(Boolean(initialKey));
   useEffect(() => {
     if (initialKey) void connect(initialKey);
+    const switchTeam = () => {
+      const invite = new URLSearchParams(location.hash.slice(1)).get("invite");
+      if (validKey(invite)) void connect(invite);
+    };
+    window.addEventListener("hashchange", switchTeam);
+    return () => window.removeEventListener("hashchange", switchTeam);
   }, [initialKey]);
 
   async function connect(key: string) {
-    setMessage("");
+    const attempt = ++connection.current;
+    setRequest(undefined);
+    setStatus("");
     setBusy(true);
     try {
       const send = requestFor(key);
       const response = await send("/api/board");
+      if (connection.current !== attempt) return;
       if (response.status === 404) {
         if (localStorage.getItem(inviteKey) === key) localStorage.removeItem(inviteKey);
-        setMessage("This invite didn’t work. Ask the team for the current link.");
+        setStatus("This invite didn’t work. Ask your team for the current link.");
         return;
       }
       if (!response.ok) throw new Error();
-      if (localStorage.getItem(inviteKey) !== key) localStorage.setItem(inviteKey, key);
+      localStorage.setItem(inviteKey, key);
       if (new URLSearchParams(location.hash.slice(1)).has("invite")) {
         history.replaceState(history.state, "", location.pathname + location.search);
       }
       setRequest(() => send);
     } catch {
-      setMessage("Couldn’t connect to the board. Try again in a moment.");
-    } finally { setBusy(false); }
+      if (connection.current === attempt) setStatus("Couldn’t connect to the board. Refresh to try again.");
+    } finally { if (connection.current === attempt) setBusy(false); }
   }
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busy) return;
-    const value = String(new FormData(event.currentTarget).get("invite") ?? "").trim();
-    const key = value || initialKey;
-    if (!validKey(key)) {
-      setMessage("Enter your team invite code or open the invite link.");
-      return;
-    }
-    void connect(key);
-  }
-  if (request) return <Board initialEntries={[]} request={request} root="./" logo="./protostars.jpg" />;
+  if (request) return <Board initialEntries={[]} request={request} root="./" assetOrigin={backend} />;
   return <>
     <header className="top"><div className="wrap bar"><a href="./" className="brand"><img src="./protostars.jpg" width="48" height="48" alt="" /><span>Protostars<small>FIRST TECH CHALLENGE · TEAM 17097</small></span></a></div></header>
-    <main className="wrap"><section className="hero"><div><h1>Robot debrief<span>.</span></h1><p>Open the team’s shared board with your invite link.</p></div></section>
-      <form className="detail pages-invite" onSubmit={submit}><label htmlFor="invite">Team invite code</label><input id="invite" name="invite" type="text" autoCapitalize="none" spellCheck={false} required={!initialKey} placeholder="Enter the team invite code" /><button className="primary" disabled={busy}>{busy ? "Connecting…" : "Open board"}</button>{message && <p role="alert">{message}</p>}</form>
+    <main className="wrap">
+      <section className="hero"><div><h1>Robot management<span>.</span></h1><p>Provided by the Protostars. Give your team a shared place to track robot problems, try ideas, and coordinate what to build next.</p></div></section>
+      {busy ? <p role="status">Opening your team board…</p> : <>
+        {status && <p className="notice" role="status">{status}</p>}
+        <section className="detail pages-invite">
+          <h2>Request access</h2>
+          <p className="body">Want your own board? Tell us about your team.</p>
+          <form onSubmit={event => event.preventDefault()}>
+            <label>Team name<input name="teamName" required maxLength={120} /></label>
+            <label>Team number<input name="teamNumber" required inputMode="numeric" pattern="[0-9]+" maxLength={12} /></label>
+            <label>Contact email<input name="email" type="email" required maxLength={254} /></label>
+            <label>Message<textarea name="message" rows={4} maxLength={3000} /></label>
+            <p className="meta">Email delivery is coming soon.</p>
+            <button className="primary" type="submit" disabled>Send request</button>
+          </form>
+        </section>
+      </>}
     </main>
   </>;
 }

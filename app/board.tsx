@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { severities, type Entry, type Kind, type Severity, type Todo } from "../lib/board";
+import { severities, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
 import { displayNameKey } from "../lib/board-cookies";
 
@@ -45,8 +45,9 @@ function EditButton({ entry, disabled, onClick, label }: { entry: Entry; disable
 }
 
 export default function Board({
-  initialEntries, request = fetch, root = "/", logo = "/protostars.jpg",
-}: { initialEntries: Entry[]; request?: typeof fetch; root?: string; logo?: string }) {
+  initialEntries, request = fetch, root = "/", assetOrigin = "",
+}: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string }) {
+  const [team, setTeam] = useState<TeamInfo>();
   const [entries, setEntries] = useState(initialEntries);
   const [tab, setTab] = useState<"problem" | "inspiration" | "todo">("problem");
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -82,8 +83,8 @@ export default function Board({
       try {
         const res = await request("/api/board", { cache: "no-store" });
         if (!res.ok) throw new Error();
-        const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[] };
-        if (active && revision === boardRevision.current) { setEntries(e => update(e, data.entries)); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
+        const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[]; teamInfo?: TeamInfo };
+        if (active && revision === boardRevision.current) { setTeam(data.teamInfo); setEntries(e => update(e, data.entries)); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
       } catch { if (active && revision === boardRevision.current) { setReady(false); setNotice("The shared board is unavailable. Reconnecting…"); } }
     }
     void refresh();
@@ -107,6 +108,10 @@ export default function Board({
     if (assignment && !assignmentDialog.current?.open) assignmentDialog.current?.showModal();
     else if (!assignment && assignmentDialog.current?.open) assignmentDialog.current.close();
   }, [assignment]);
+
+  useEffect(() => {
+    if (team) document.title = team.name + " | Robot board";
+  }, [team]);
 
   function openAssignment(idea: Entry, todo?: Todo) {
     setAssignmentError("");
@@ -175,11 +180,11 @@ export default function Board({
     try {
       const response = await request("/api/board", { cache: "no-store" });
       if (!response.ok) throw new Error();
-      const { version, team, entries, todos = [] } = await response.json() as { version: number; team: string; entries: Entry[]; todos?: Todo[] };
-      const blob = new Blob([JSON.stringify({ version, team, entries, todos }, null, 2)], { type: "application/json" });
+      const { version, team, teamInfo, entries, todos = [] } = await response.json() as { version: number; team: string; teamInfo?: TeamInfo; entries: Entry[]; todos?: Todo[] };
+      const blob = new Blob([JSON.stringify({ version, team, teamInfo, entries, todos }, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url; link.download = "ftc-17097-debrief.json"; link.click();
+      link.href = url; link.download = `ftc-${team}-board.json`; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { setNotice("Couldn't download the shared board. Please try again."); }
   }
@@ -348,7 +353,7 @@ export default function Board({
   }
   return <>
     <header className="top"><div className="wrap bar">
-      <a href={root} className="brand"><img src={logo} width="48" height="48" alt="" /><span>Protostars<small>FIRST TECH CHALLENGE · TEAM 17097</small></span></a>
+      <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Robot board"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
       <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => open({kind: "comment", identity: true})}>Set display name</button>}
       <button className="quiet" onClick={download} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
     </div></header>
@@ -411,7 +416,7 @@ export default function Board({
           </section>;
         })}
       </section>}
-      <footer>Protostars · Team 17097 <span> / </span> Bring a different idea. We’ll compare what works.</footer>
+      <footer>{team ? team.name + " · Team " + team.number : "Robot board"}</footer>
     </main>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
       {assignment && <form onSubmit={event => {
