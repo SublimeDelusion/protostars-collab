@@ -34,8 +34,12 @@ function ChecklistIcon() {
   </svg>;
 }
 
-function EditButton({ entry, disabled, onClick }: { entry: Entry; disabled: boolean; onClick: () => void }) {
-  return <button type="button" className="edit-pencil" aria-label={entry.kind === "comment" ? "Edit your comment" : `Edit ${entry.kind}: ${entry.title}`} title={entry.kind === "comment" ? "Edit your comment" : "Edit title and description"} disabled={disabled} onClick={onClick}>
+function CheckIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 12 5 5L20 6" /></svg>;
+}
+
+function EditButton({ entry, disabled, onClick, label }: { entry: Entry; disabled: boolean; onClick: () => void; label?: string }) {
+  return <button type="button" className="edit-pencil" aria-label={label ?? (entry.kind === "comment" ? "Edit your comment" : `Edit ${entry.kind}: ${entry.title}`)} title={label ?? (entry.kind === "comment" ? "Edit your comment" : "Edit title and description")} disabled={disabled} onClick={onClick}>
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>
   </button>;
 }
@@ -47,6 +51,9 @@ export default function Board({
   const [tab, setTab] = useState<"problem" | "inspiration" | "todo">("problem");
   const [todos, setTodos] = useState<Todo[]>([]);
   const [pendingTodo, setPendingTodo] = useState<string>();
+  const [assignment, setAssignment] = useState<{ idea: Entry; todo?: Todo }>();
+  const [assignmentError, setAssignmentError] = useState("");
+  const assignmentDialog = useRef<HTMLDialogElement>(null);
   const [jump, setJump] = useState<string>();
   const [selected, setSelected] = useState(initialEntries[0]?.id ?? "");
   const [expanded, setExpanded] = useState<string[]>(initialEntries[1] ? [initialEntries[1].id] : []);
@@ -95,6 +102,16 @@ export default function Board({
     target?.scrollIntoView({ block: "center" });
     setJump(undefined);
   }, [jump]);
+
+  useEffect(() => {
+    if (assignment && !assignmentDialog.current?.open) assignmentDialog.current?.showModal();
+    else if (!assignment && assignmentDialog.current?.open) assignmentDialog.current.close();
+  }, [assignment]);
+
+  function openAssignment(idea: Entry, todo?: Todo) {
+    setAssignmentError("");
+    setAssignment({ idea, todo });
+  }
 
   function open(next: Draft) { setError(""); setNameDraft(""); setDraft(next); }
   function edit(entry: Entry) { open({ kind: entry.kind, edit: entry }); }
@@ -167,21 +184,24 @@ export default function Board({
     } catch { setNotice("Couldn't download the shared board. Please try again."); }
   }
 
-  async function saveTodo(id: string, done?: boolean) {
+  async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-done"; done: boolean }) {
     if (pendingTodo) return;
     setPendingTodo(id);
     setNotice("");
     try {
       const response = await request("/api/board", {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: done === undefined ? "add-todo" : "set-todo-done", id, done }),
+        body: JSON.stringify({ id, ...change }),
       });
       if (!response.ok) throw new Error(response.status < 500 ? (await response.json() as { error: string }).error : "Could not save the to-do.");
       const { todo } = await response.json() as { todo: Todo };
       boardRevision.current++;
       setTodos(items => items.some(item => item.ideaId === id) ? items.map(item => item.ideaId === id ? todo : item) : [...items, todo]);
+      if (change.action !== "set-todo-done") setAssignment(undefined);
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Could not save the to-do.");
+      const message = err instanceof Error ? err.message : "Could not save the to-do.";
+      if (change.action === "set-todo-done") setNotice(message);
+      else setAssignmentError(message);
     } finally { setPendingTodo(undefined); }
   }
 
@@ -273,34 +293,47 @@ export default function Board({
         const outcome = outcomes.get(i.id);
         const todo = todoByIdea.get(i.id);
         const checkLabel = isProblem ? "Selected solution" : "Completed idea";
+        const outcomeAction = isProblem ? "Select as solution" : "Mark complete";
+        const canChooseOutcome = isProblem ? !solved : !outcome;
+        const chooseOutcome = () => open({kind: isProblem ? "resolution" : "completion", parent: i.id, context: i.title});
+        const logTest = () => {
+          expand(i.id);
+          open({kind: "test", parent: i.id, context: i.title});
+        };
         return <article className="idea" key={i.id}>
           <div className="idea-header">
             <button id={"idea-toggle-" + i.id} className="idea-title" aria-expanded={isOpen} aria-controls={"idea-" + i.id} onClick={() => setExpanded(ids => isOpen ? ids.filter(id => id !== i.id) : [...ids, i.id])}>
               <span className="chevron" aria-hidden="true">{isOpen ? "−" : "+"}</span><strong>{i.title}</strong><small>{comments.length} {comments.length === 1 ? "comment" : "comments"}</small>
             </button>
-            {todo && <button type="button" className={`todo-marker${todo.done ? " todo-done" : ""}`} title={todo.done ? "Checked off on the to-do list" : "On the to-do list"} aria-label={`${todo.done ? "Checked off" : "On the to-do list"}: ${i.title}`} onClick={() => {setSearch(""); setTab("todo");}}><ChecklistIcon /></button>}
-            {outcome && <span className="idea-check" role="img" aria-label={checkLabel} title={checkLabel}>✓</span>}
-            {isProblem && <button type="button" className="test-count" aria-label={`${tests.length} ${tests.length === 1 ? "test run" : "test runs"} for ${i.title}`} title="View test runs" onClick={() => expand(i.id)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v7L4.5 19a1 1 0 0 0 1 2h13a1 1 0 0 0 1-2L14 10V3M8 15h8"/></svg>{tests.length}
+            <div className="idea-tools">
+            {(todo || isOpen) && <button type="button" className={`todo-marker${todo?.done ? " todo-done" : ""}${todo ? "" : " idea-action-available"}`} title={todo ? todo.done ? "Checked off on the to-do list" : "On the to-do list" : "Add to to-do list"} aria-label={`${todo ? todo.done ? "Checked off" : "On the to-do list" : "Add to to-do list"}: ${i.title}`} disabled={!todo && (!ready || Boolean(pendingTodo))} onClick={() => {
+              if (todo) { setSearch(""); setTab("todo"); }
+              else openAssignment(i);
+            }}><ChecklistIcon /></button>}
+            {outcome ? <span className="idea-check" role="img" aria-label={checkLabel} title={checkLabel}><CheckIcon /></span>
+              : isOpen && canChooseOutcome && <button type="button" className="idea-check idea-action-available" aria-label={`${outcomeAction}: ${i.title}`} title={outcomeAction} disabled={!ready} onClick={chooseOutcome}><CheckIcon /></button>}
+            {isProblem && (isOpen || tests.length > 0) && <button type="button" className="test-count" aria-label={`Log a test for ${i.title}. ${tests.length} ${tests.length === 1 ? "test run" : "test runs"}`} title="Log a test" disabled={!ready} onClick={logTest}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v7L4.5 19a1 1 0 0 0 1 2h13a1 1 0 0 0 1-2L14 10V3M8 15h8"/></svg>{tests.length > 0 && tests.length}
             </button>}
             <button type="button" className="star-button" aria-label={`${hasVoted ? "You starred" : "Star"} ${i.title}. ${votes.length} ${votes.length === 1 ? "star" : "stars"}`} aria-pressed={hasVoted} title={hasVoted ? "You already starred this idea" : isProblem ? "Star this idea and explain why" : "Star this idea"} disabled={!ready || hasVoted || saving} onClick={() => {
               const vote: Draft = {kind: isProblem ? "comment" : "vote", parent: i.id, context: i.title, starred: isProblem};
               if (isProblem) expand(i.id);
               if (isProblem || !name) open(vote); else void saveContribution(vote);
             }}><span aria-hidden="true">{hasVoted ? "★" : "☆"}</span>{votes.length}</button>
+            </div>
           </div>
           <div id={"idea-" + i.id} hidden={!isOpen} className="idea-body">
             <div className="editable-entry idea-description"><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
             {discussion(i, comments)}
             {isProblem && <section className="discussion">
-              <div className="discussion-head"><h4>Tests</h4><button className="quiet small" disabled={!ready} onClick={() => open({kind: "test", parent: i.id, context: i.title})}>＋ Log test</button></div>
+              <div className="discussion-head"><h4>Tests</h4><button className="quiet small" disabled={!ready} onClick={logTest}>＋ Log test</button></div>
               {!tests.length && <p className="meta">No test runs logged yet.</p>}
               {tests.map(logEntry)}
             </section>}
-            <div className="outcome-actions">
-              {!todo && <button className="quiet small" disabled={!ready || Boolean(pendingTodo)} onClick={() => void saveTodo(i.id)}><ChecklistIcon /> Add to to-do list</button>}
-              {((isProblem && !solved) || (!isProblem && !outcome)) && <button className="quiet small" disabled={!ready} onClick={() => open({kind: isProblem ? "resolution" : "completion", parent: i.id, context: i.title})}>{isProblem ? "Select as solution" : "Mark complete"}</button>}
-            </div>
+            {(!todo || canChooseOutcome) && <div className="outcome-actions">
+              {!todo && <button className="quiet small" disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(i)}><ChecklistIcon /> Add to to-do list</button>}
+              {canChooseOutcome && <button className="quiet small solution-action" disabled={!ready} onClick={chooseOutcome}><CheckIcon /> {outcomeAction}</button>}
+            </div>}
           </div>
         </article>;
       })}
@@ -367,15 +400,35 @@ export default function Board({
           return <section className="discussion" key={String(done)}>
             <h3>{done ? "Checked off" : "To do"} <small className="meta">{items.length}</small></h3>
             {!items.length && <p className="meta">{done ? "Nothing checked off yet." : search ? "No matching to-dos." : "No ideas queued yet."}</p>}
-            {items.map(({ idea, parent }) => <div className="todo-row" key={idea.id}>
-              <input type="checkbox" checked={done} disabled={!ready || Boolean(pendingTodo)} aria-label={done ? `Reopen ${idea.title} on the to-do list` : `Check off ${idea.title}`} onChange={event => void saveTodo(idea.id, event.currentTarget.checked)} />
+            {items.map(({ idea, parent, todo }) => <div className="todo-row" key={idea.id}>
+              <input type="checkbox" checked={done} disabled={!ready || Boolean(pendingTodo)} aria-label={done ? `Reopen ${idea.title} on the to-do list` : `Check off ${idea.title}`} onChange={event => void saveTodo(idea.id, { action: "set-todo-done", done: event.currentTarget.checked })} />
               <div><button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button><p className="meta">{parent.kind === "problem" ? "Problem" : "Inspiration"} · {parent.title}</p></div>
+              <div className="todo-assignee editable-entry">
+                <span>{todo.assignee || "Unassigned"}</span>
+                <EditButton entry={idea} label={`Edit assignee for ${idea.title}`} disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(idea, todo)} />
+              </div>
             </div>)}
           </section>;
         })}
       </section>}
       <footer>Protostars · Team 17097 <span> / </span> Bring a different idea. We’ll compare what works.</footer>
     </main>
+    <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
+      {assignment && <form onSubmit={event => {
+        event.preventDefault();
+        const assignee = String(new FormData(event.currentTarget).get("assignee") ?? "") || null;
+        void saveTodo(assignment.idea.id, { action: assignment.todo ? "set-todo-assignee" : "add-todo", assignee });
+      }}>
+        <div className="dialog-head"><h2 id="assignment-title">{assignment.todo ? "Edit assignee" : "Add to to-do list"}</h2></div>
+        <p className="meta">{assignment.idea.title}</p>
+        <label>Who should do this?<select name="assignee" defaultValue={assignment.todo?.assignee ?? ""}>
+          <option value="">Unassigned</option>
+          {[...new Set([...knownNames, ...(assignment.todo?.assignee ? [assignment.todo.assignee] : [])])].sort((a, b) => a.localeCompare(b)).map(person => <option key={person} value={person}>{person}</option>)}
+        </select></label>
+        {assignmentError && <p className="notice" role="alert">{assignmentError}</p>}
+        <div className="dialog-actions"><button type="button" className="quiet" disabled={Boolean(pendingTodo)} onClick={() => setAssignment(undefined)}>Cancel</button><button className="primary" disabled={Boolean(pendingTodo)}>{assignment.todo ? "Save assignee" : "Add to list"}</button></div>
+      </form>}
+    </dialog>
     <dialog ref={dialog} onCancel={e => {e.preventDefault(); if (!saving) setDraft(undefined);}}>
       {draft && <form key={draft.edit?.id ?? draft.kind + (draft.parent ?? "")} onSubmit={submit}>
         <div className="dialog-head"><h2>{draft.identity ? "Set display name" : draft.starred ? "Star this idea" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>

@@ -61,3 +61,14 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .todo-link{border:0;background:transparent;padding:0;color:var(--ink);font-weight:750;text-align:left;overflow-wrap:anywhere}
 .todo-link:hover{text-decoration:underline}
 @media(max-width:480px){.tabs{flex-wrap:wrap}}
+.idea-tools{display:flex;align-items:center;gap:4px;flex:none;padding-right:8px}
+.idea-tools .star-button{margin-right:0}
+.idea-tools .test-count,.idea-tools .idea-check,.idea-tools .todo-marker{min-width:36px;min-height:38px}
+.idea-tools .idea-action-available{background:transparent}
+.idea-tools .idea-action-available:hover{border-color:currentColor}
+.outcome-actions{border-top:1px solid var(--line);padding-top:12px;margin-top:16px}
+.solution-action svg{color:#9fdb9f}
+@media(max-width:420px){.idea-header:has(.idea-title[aria-expanded="true"]){flex-wrap:wrap}.idea-header .idea-title[aria-expanded="true"]{flex-basis:100%}.idea-header .idea-title[aria-expanded="true"]+.idea-tools{margin-left:auto;padding-bottom:8px}}
+.todo-assignee{margin-left:auto;align-self:center;font-size:14px;min-height:38px;display:flex;align-items:center;color:var(--muted)}
+.todo-assignee .edit-pencil{opacity:1;pointer-events:auto}
+@media(max-width:480px){.todo-row{flex-wrap:wrap}.todo-assignee{margin-left:30px}}
