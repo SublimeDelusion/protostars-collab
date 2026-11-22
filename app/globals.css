@@ -52,3 +52,12 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .pages-invite{display:grid;gap:10px;width:min(100%,550px)}
 .pages-invite button{justify-self:start}
 .pages-invite p{margin:0}
+.outcome-actions{gap:8px;flex-wrap:wrap}
+.todo-marker{display:grid;place-items:center;min-width:30px;min-height:36px;padding:3px;border:1px solid var(--line);border-radius:7px;color:#d9c4ff;background:#302643}
+.todo-marker.todo-done{color:#a6e2af;background:#263b2d}
+.todo-list h3{margin:4px 0 9px}
+.todo-row{display:flex;align-items:start;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.todo-row input{width:18px;height:18px;accent-color:var(--orange);flex:none;margin:4px 0 0}
+.todo-link{border:0;background:transparent;padding:0;color:var(--ink);font-weight:750;text-align:left;overflow-wrap:anywhere}
+.todo-link:hover{text-decoration:underline}
+@media(max-width:480px){.tabs{flex-wrap:wrap}}

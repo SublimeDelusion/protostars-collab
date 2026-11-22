@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { severities, type Entry, type Kind, type Severity } from "../lib/board";
+import { severities, type Entry, type Kind, type Severity, type Todo } from "../lib/board";
 
 import { displayNameKey } from "../lib/board-cookies";
 
@@ -28,6 +28,12 @@ function ProblemStatus({ status, full = false }: { status: Severity | "resolved"
   </span>;
 }
 
+function ChecklistIcon() {
+  return <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m3 6 2 2 3-4m3 3h9M3 11h5v5H3zm8 2.5h9M3 19h5m3 0h9"/>
+  </svg>;
+}
+
 function EditButton({ entry, disabled, onClick }: { entry: Entry; disabled: boolean; onClick: () => void }) {
   return <button type="button" className="edit-pencil" aria-label={entry.kind === "comment" ? "Edit your comment" : `Edit ${entry.kind}: ${entry.title}`} title={entry.kind === "comment" ? "Edit your comment" : "Edit title and description"} disabled={disabled} onClick={onClick}>
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>
@@ -38,7 +44,10 @@ export default function Board({
   initialEntries, request = fetch, root = "/", logo = "/protostars.jpg",
 }: { initialEntries: Entry[]; request?: typeof fetch; root?: string; logo?: string }) {
   const [entries, setEntries] = useState(initialEntries);
-  const [tab, setTab] = useState<"problem" | "inspiration">("problem");
+  const [tab, setTab] = useState<"problem" | "inspiration" | "todo">("problem");
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [pendingTodo, setPendingTodo] = useState<string>();
+  const [jump, setJump] = useState<string>();
   const [selected, setSelected] = useState(initialEntries[0]?.id ?? "");
   const [expanded, setExpanded] = useState<string[]>(initialEntries[1] ? [initialEntries[1].id] : []);
   const [search, setSearch] = useState("");
@@ -66,8 +75,8 @@ export default function Board({
       try {
         const res = await request("/api/board", { cache: "no-store" });
         if (!res.ok) throw new Error();
-        const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[] };
-        if (active && revision === boardRevision.current) { setEntries(e => update(e, data.entries)); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
+        const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[] };
+        if (active && revision === boardRevision.current) { setEntries(e => update(e, data.entries)); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
       } catch { if (active && revision === boardRevision.current) { setReady(false); setNotice("The shared board is unavailable. Reconnecting…"); } }
     }
     void refresh();
@@ -79,6 +88,14 @@ export default function Board({
     if (draft && !dialog.current?.open) dialog.current?.showModal();
     else if (!draft && dialog.current?.open) dialog.current.close();
   }, [draft]);
+  useEffect(() => {
+    if (!jump) return;
+    const target = document.getElementById("idea-toggle-" + jump);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: "center" });
+    setJump(undefined);
+  }, [jump]);
+
   function open(next: Draft) { setError(""); setNameDraft(""); setDraft(next); }
   function edit(entry: Entry) { open({ kind: entry.kind, edit: entry }); }
   async function useName(author: string, confirmExisting: boolean) {
@@ -141,13 +158,31 @@ export default function Board({
     try {
       const response = await request("/api/board", { cache: "no-store" });
       if (!response.ok) throw new Error();
-      const { version, team, entries } = await response.json() as { version: number; team: string; entries: Entry[] };
-      const blob = new Blob([JSON.stringify({ version, team, entries }, null, 2)], { type: "application/json" });
+      const { version, team, entries, todos = [] } = await response.json() as { version: number; team: string; entries: Entry[]; todos?: Todo[] };
+      const blob = new Blob([JSON.stringify({ version, team, entries, todos }, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url; link.download = "ftc-17097-debrief.json"; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { setNotice("Couldn't download the shared board. Please try again."); }
+  }
+
+  async function saveTodo(id: string, done?: boolean) {
+    if (pendingTodo) return;
+    setPendingTodo(id);
+    setNotice("");
+    try {
+      const response = await request("/api/board", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: done === undefined ? "add-todo" : "set-todo-done", id, done }),
+      });
+      if (!response.ok) throw new Error(response.status < 500 ? (await response.json() as { error: string }).error : "Could not save the to-do.");
+      const { todo } = await response.json() as { todo: Todo };
+      boardRevision.current++;
+      setTodos(items => items.some(item => item.ideaId === id) ? items.map(item => item.ideaId === id ? todo : item) : [...items, todo]);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not save the to-do.");
+    } finally { setPendingTodo(undefined); }
   }
 
   const problems = entries.filter(e => e.kind === "problem");
@@ -162,6 +197,22 @@ export default function Board({
   const activeProblems = shown.filter(p => !solutionFor(p.id)).sort((a, b) => severities.indexOf(a.severity ?? "medium") - severities.indexOf(b.severity ?? "medium"));
   const solvedProblems = shown.filter(p => solutionFor(p.id));
   const current = shown.find(p => p.id === selected) ?? activeProblems[0] ?? solvedProblems[0];
+  const todoByIdea = new Map(todos.map(todo => [todo.ideaId, todo]));
+  const lookup = new Map(entries.map(entry => [entry.id, entry]));
+  const todoRows = todos.flatMap(todo => {
+    const idea = lookup.get(todo.ideaId);
+    const parent = idea?.parent ? lookup.get(idea.parent) : undefined;
+    return idea && parent && (idea.kind === "idea") && (matches(idea) || matches(parent)) ? [{ todo, idea, parent }] : [];
+  });
+
+  function showIdea(idea: Entry, parent: Entry) {
+    setSearch("");
+    setTab(parent.kind === "problem" ? "problem" : "inspiration");
+    if (parent.kind === "problem") setSelected(parent.id);
+    expand(idea.id);
+    setJump(idea.id);
+  }
+
   const solution = current ? solutionFor(current.id) : undefined;
   const resolution = solution ? outcomes.get(solution.id) : undefined;
 
@@ -220,12 +271,14 @@ export default function Board({
         const hasVoted = Boolean(name) && votes.some(c => displayNameKey(c.author) === displayNameKey(name));
         const isOpen = expanded.includes(i.id);
         const outcome = outcomes.get(i.id);
+        const todo = todoByIdea.get(i.id);
         const checkLabel = isProblem ? "Selected solution" : "Completed idea";
         return <article className="idea" key={i.id}>
           <div className="idea-header">
-            <button className="idea-title" aria-expanded={isOpen} aria-controls={"idea-" + i.id} onClick={() => setExpanded(ids => isOpen ? ids.filter(id => id !== i.id) : [...ids, i.id])}>
+            <button id={"idea-toggle-" + i.id} className="idea-title" aria-expanded={isOpen} aria-controls={"idea-" + i.id} onClick={() => setExpanded(ids => isOpen ? ids.filter(id => id !== i.id) : [...ids, i.id])}>
               <span className="chevron" aria-hidden="true">{isOpen ? "−" : "+"}</span><strong>{i.title}</strong><small>{comments.length} {comments.length === 1 ? "comment" : "comments"}</small>
             </button>
+            {todo && <button type="button" className={`todo-marker${todo.done ? " todo-done" : ""}`} title={todo.done ? "Checked off on the to-do list" : "On the to-do list"} aria-label={`${todo.done ? "Checked off" : "On the to-do list"}: ${i.title}`} onClick={() => {setSearch(""); setTab("todo");}}><ChecklistIcon /></button>}
             {outcome && <span className="idea-check" role="img" aria-label={checkLabel} title={checkLabel}>✓</span>}
             {isProblem && <button type="button" className="test-count" aria-label={`${tests.length} ${tests.length === 1 ? "test run" : "test runs"} for ${i.title}`} title="View test runs" onClick={() => expand(i.id)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v7L4.5 19a1 1 0 0 0 1 2h13a1 1 0 0 0 1-2L14 10V3M8 15h8"/></svg>{tests.length}
@@ -244,7 +297,10 @@ export default function Board({
               {!tests.length && <p className="meta">No test runs logged yet.</p>}
               {tests.map(logEntry)}
             </section>}
-            {((isProblem && !solved) || (!isProblem && !outcome)) && <div className="outcome-actions"><button className="quiet small" disabled={!ready} onClick={() => open({kind: isProblem ? "resolution" : "completion", parent: i.id, context: i.title})}>{isProblem ? "Select as solution" : "Mark complete"}</button></div>}
+            <div className="outcome-actions">
+              {!todo && <button className="quiet small" disabled={!ready || Boolean(pendingTodo)} onClick={() => void saveTodo(i.id)}><ChecklistIcon /> Add to to-do list</button>}
+              {((isProblem && !solved) || (!isProblem && !outcome)) && <button className="quiet small" disabled={!ready} onClick={() => open({kind: isProblem ? "resolution" : "completion", parent: i.id, context: i.title})}>{isProblem ? "Select as solution" : "Mark complete"}</button>}
+            </div>
           </div>
         </article>;
       })}
@@ -265,13 +321,13 @@ export default function Board({
     </div></header>
     <main className="wrap">
       <section className="hero">
-        <div><div className="eyebrow">BIOBUZZ / COMPETITION NOTES</div><h1>Robot debrief<span>.</span></h1><p>Here’s what we wrote down during walkarounds and right after the competition. Add what you noticed, share ideas to test, and tell us what you saw other teams doing.</p></div>
+        <div><div className="eyebrow">BIOBUZZ / COMPETITION NOTES</div><h1>Robot debrief<span>.</span></h1><p>Here’s what we wrote down during walkarounds and right after the competition. Add what you noticed, share ideas to test, and share what sparked your next idea.</p></div>
         <div className="stats"><div><strong>{problems.length}</strong><span>Problems</span></div><div><strong>{ideas.length}</strong><span>Ideas</span></div><div><strong>{inspirations.length}</strong><span>Inspirations</span></div></div>
       </section>
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Board controls">
-        <div className="tabs"><button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>Problems &amp; ideas</button><button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>Inspiration</button></div>
-        <div className="tools"><input type="search" placeholder={tab === "problem" ? "Find a problem or idea" : "Find inspiration"} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} /><button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ {tab === "problem" ? "Add problem" : "Add inspiration"}</button></div>
+        <div className="tabs"><button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>Problems &amp; ideas</button><button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>Inspiration</button><button className={tab === "todo" ? "active" : ""} aria-pressed={tab === "todo"} onClick={() => {setTab("todo"); setSearch("");}}>To-do list</button></div>
+        <div className="tools"><input type="search" placeholder={tab === "problem" ? "Find a problem or idea" : tab === "todo" ? "Find a to-do" : "Find inspiration"} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />{tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ {tab === "problem" ? "Add problem" : "Add inspiration"}</button>}</div>
       </section>
       {tab === "problem" ? <div className="board">
         <aside className="problem-list" aria-label="Problems">
@@ -296,13 +352,27 @@ export default function Board({
           </div>}
           {ideaCards(current)}
         </section>}
-      </div> : <section className="inspiration"><h2>Things we saw</h2><p className="body">What did other teams build or do that we should talk about? Pit setups and match strategies count too.</p>
+      </div> : tab === "inspiration" ? <section className="inspiration"><h2>What sparked an idea?</h2><p className="body">Share something you noticed at competition, a component you’d like to build, or an idea for the robot, pit, or team that you want to explore.</p>
         <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id}>
           <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
           {discussion(i, entries.filter(e => e.kind === "comment" && e.parent === i.id))}
           {ideaCards(i)}
         </article>)}</div>
         {!inspirations.some(visible) && <p className="empty">No matching inspiration.</p>}
+      </section> : <section className="detail todo-list">
+        <h2>To-do list</h2>
+        <p className="body">Queue ideas from Problems or Inspiration, then check them off here. Open any idea to see its discussion.</p>
+        {[false, true].map(done => {
+          const items = todoRows.filter(row => row.todo.done === done);
+          return <section className="discussion" key={String(done)}>
+            <h3>{done ? "Checked off" : "To do"} <small className="meta">{items.length}</small></h3>
+            {!items.length && <p className="meta">{done ? "Nothing checked off yet." : search ? "No matching to-dos." : "No ideas queued yet."}</p>}
+            {items.map(({ idea, parent }) => <div className="todo-row" key={idea.id}>
+              <input type="checkbox" checked={done} disabled={!ready || Boolean(pendingTodo)} aria-label={done ? `Reopen ${idea.title} on the to-do list` : `Check off ${idea.title}`} onChange={event => void saveTodo(idea.id, event.currentTarget.checked)} />
+              <div><button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button><p className="meta">{parent.kind === "problem" ? "Problem" : "Inspiration"} · {parent.title}</p></div>
+            </div>)}
+          </section>;
+        })}
       </section>}
       <footer>Protostars · Team 17097 <span> / </span> Bring a different idea. We’ll compare what works.</footer>
     </main>
