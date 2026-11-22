@@ -110,7 +110,7 @@ export default function Board({
   }, [assignment]);
 
   useEffect(() => {
-    if (team) document.title = team.name + " | Robot board";
+    if (team) document.title = team.name + " | Virtual Pit";
   }, [team]);
 
   function openAssignment(idea: Entry, todo?: Todo) {
@@ -353,13 +353,13 @@ export default function Board({
   }
   return <>
     <header className="top"><div className="wrap bar">
-      <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Robot board"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
+      <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Virtual Pit"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
       <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => open({kind: "comment", identity: true})}>Set display name</button>}
       <button className="quiet" onClick={download} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
     </div></header>
     <main className="wrap">
       <section className="hero">
-        <div><div className="eyebrow">BIOBUZZ / COMPETITION NOTES</div><h1>Robot debrief<span>.</span></h1><p>Here’s what we wrote down during walkarounds and right after the competition. Add what you noticed, share ideas to test, and share what sparked your next idea.</p></div>
+        <div><h1>Virtual Pit<span>.</span></h1><p>Track robot issues, test ideas, and plan the next build.</p></div>
         <div className="stats"><div><strong>{problems.length}</strong><span>Problems</span></div><div><strong>{ideas.length}</strong><span>Ideas</span></div><div><strong>{inspirations.length}</strong><span>Inspirations</span></div></div>
       </section>
       {notice && <p className="notice" role="status">{notice}</p>}
@@ -416,7 +416,7 @@ export default function Board({
           </section>;
         })}
       </section>}
-      <footer>{team ? team.name + " · Team " + team.number : "Robot board"}</footer>
+      <footer>{team ? team.name + " · Team " + team.number  : "Virtual Pit"}</footer>
     </main>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
       {assignment && <form onSubmit={event => {

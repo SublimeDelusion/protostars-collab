@@ -1,6 +1,6 @@
-# Protostars robot management
+# Virtual Pit
 
-The robot management board provided by FTC Team 17097, Protostars. GitHub Pages publishes the public landing page and client from `main` → `/docs`.
+The FTC collaboration site provided by FTC Team 17097, Protostars. GitHub Pages publishes the public landing page and client from `main` → `/docs`.
 
 Share the GitHub Pages URL with `#invite=TEAM_INVITE_CODE` appended. The backend matches the invite to one team. The frontend stays on GitHub Pages and remembers access on the device.
 
