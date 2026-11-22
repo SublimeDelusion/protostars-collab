@@ -84,7 +84,7 @@ function Pages() {
   return <>
     <header className="top"><div className="wrap bar"><a href="./" className="brand"><img src="./protostars.jpg" width="48" height="48" alt="" /><span>Protostars<small>FIRST TECH CHALLENGE · TEAM 17097</small></span></a></div></header>
     <main className="wrap">
-      <section className="hero"><div><h1>Virtual Pit<span>.</span></h1><p>Track robot issues, test ideas, and plan the next build.</p><p className="public-credit">Provided by the Protostars.</p></div></section>
+      <section className="hero"><div><h1>FTC Workshop</h1><p className="workshop-credit">By the Protostars 17097</p></div></section>
       {busy ? <p role="status">Opening your team board…</p> : <>
         {status && <p className="notice" role="status">{status}</p>}
         <section className="detail pages-invite">

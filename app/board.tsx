@@ -49,7 +49,7 @@ export default function Board({
 }: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string }) {
   const [team, setTeam] = useState<TeamInfo>();
   const [entries, setEntries] = useState(initialEntries);
-  const [tab, setTab] = useState<"problem" | "inspiration" | "todo">("problem");
+  const [tab, setTab] = useState<"problem" | "inspiration" | "todo">("inspiration");
   const [todos, setTodos] = useState<Todo[]>([]);
   const [pendingTodo, setPendingTodo] = useState<string>();
   const [assignment, setAssignment] = useState<{ idea: Entry; todo?: Todo }>();
@@ -110,7 +110,7 @@ export default function Board({
   }, [assignment]);
 
   useEffect(() => {
-    if (team) document.title = team.name + " | Virtual Pit";
+    if (team) document.title = "FTC Workshop | " + team.name;
   }, [team]);
 
   function openAssignment(idea: Entry, todo?: Todo) {
@@ -353,18 +353,22 @@ export default function Board({
   }
   return <>
     <header className="top"><div className="wrap bar">
-      <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Virtual Pit"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
+      <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Protostars"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
       <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => open({kind: "comment", identity: true})}>Set display name</button>}
       <button className="quiet" onClick={download} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
     </div></header>
     <main className="wrap">
       <section className="hero">
-        <div><h1>Virtual Pit<span>.</span></h1><p>Track robot issues, test ideas, and plan the next build.</p></div>
+        <div><h1>FTC Workshop</h1><p className="workshop-credit">By the Protostars 17097</p></div>
         <div className="stats"><div><strong>{problems.length}</strong><span>Problems</span></div><div><strong>{ideas.length}</strong><span>Ideas</span></div><div><strong>{inspirations.length}</strong><span>Inspirations</span></div></div>
       </section>
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Board controls">
-        <div className="tabs"><button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>Problems &amp; ideas</button><button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>Inspiration</button><button className={tab === "todo" ? "active" : ""} aria-pressed={tab === "todo"} onClick={() => {setTab("todo"); setSearch("");}}>To-do list</button></div>
+        <div className="tabs">
+          <button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>Idea Lab</button>
+          <button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>Virtual Pit</button>
+          <button className={tab === "todo" ? "active" : ""} aria-pressed={tab === "todo"} onClick={() => {setTab("todo"); setSearch("");}}>To-do list</button>
+        </div>
         <div className="tools"><input type="search" placeholder={tab === "problem" ? "Find a problem or idea" : tab === "todo" ? "Find a to-do" : "Find inspiration"} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />{tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ {tab === "problem" ? "Add problem" : "Add inspiration"}</button>}</div>
       </section>
       {tab === "problem" ? <div className="board">
@@ -390,7 +394,7 @@ export default function Board({
           </div>}
           {ideaCards(current)}
         </section>}
-      </div> : tab === "inspiration" ? <section className="inspiration"><h2>What sparked an idea?</h2><p className="body">Share something you noticed at competition, a component you’d like to build, or an idea for the robot, pit, or team that you want to explore.</p>
+      </div> : tab === "inspiration" ? <section className="inspiration"><h2>What sparked an idea?</h2><p className="body">Share something you saw at a competition or an idea to try this season. It could be a robot design, a better battery charging station, or a new way to run practice.</p>
         <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id}>
           <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
           {discussion(i, entries.filter(e => e.kind === "comment" && e.parent === i.id))}
@@ -399,7 +403,7 @@ export default function Board({
         {!inspirations.some(visible) && <p className="empty">No matching inspiration.</p>}
       </section> : <section className="detail todo-list">
         <h2>To-do list</h2>
-        <p className="body">Queue ideas from Problems or Inspiration, then check them off here. Open any idea to see its discussion.</p>
+        <p className="body">Queue ideas from the Idea Lab or Virtual Pit, then check them off here. Open any idea to see its discussion.</p>
         {[false, true].map(done => {
           const items = todoRows.filter(row => row.todo.done === done);
           return <section className="discussion" key={String(done)}>
@@ -416,7 +420,7 @@ export default function Board({
           </section>;
         })}
       </section>}
-      <footer>{team ? team.name + " · Team " + team.number  : "Virtual Pit"}</footer>
+      <footer>{team ? team.name + " · Team " + team.number : "FTC Workshop"}</footer>
     </main>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
       {assignment && <form onSubmit={event => {

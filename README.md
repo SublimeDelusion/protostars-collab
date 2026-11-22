@@ -1,4 +1,4 @@
-# Virtual Pit
+# FTC Workshop
 
 The FTC collaboration site provided by FTC Team 17097, Protostars. GitHub Pages publishes the public landing page and client from `main` → `/docs`.
 
