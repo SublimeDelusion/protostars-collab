@@ -526,7 +526,16 @@ export default function Board({
     <main className="wrap">
       <section className="hero">
         <div><h1>FTC Workshop</h1><p className="workshop-credit">by Team 17097 Protostars</p></div>
-        <div className="stats"><div><strong>{problems.length}</strong><span>Problems</span></div><div><strong>{ideas.length}</strong><span>Ideas</span></div><div><strong>{inspirations.length}</strong><span>Inspirations</span></div></div>
+        <div className="stats" aria-label="Board shortcuts">
+          {([
+            { tab: "problem", label: "Problems", count: problems.length },
+            { tab: "inspiration", label: "Inspirations", count: inspirations.length },
+            { tab: "todo", label: "Tasks", count: todos.filter(todo => lookup.has(todo.ideaId)).length },
+          ] as const).map(stat => <button type="button" key={stat.tab} onClick={() => {
+            setTab(stat.tab);
+            setSearch("");
+          }}><strong>{stat.count}</strong><span>{stat.label}</span></button>)}
+        </div>
       </section>
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Workshop navigation">
