@@ -1,7 +1,9 @@
 import { and, asc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../../../db";
+import { env } from "cloudflare:workers";
 import { contributions, people, todos } from "../../../db/schema";
-import { PAGES_ORIGIN } from "../../../lib/pages-origin";
+import { PAGES_ORIGIN, workshopInviteLink } from "../../../lib/pages-origin";
+import { issueTeamInvite } from "../../../lib/team-invites";
 import { DEFAULT_TEAM, teamFor, teamInfo, teamSeed } from "../../../lib/teams";
 import { NAME_COOKIE, boardCookie, displayName, displayNameKey, normalizeDisplayName } from "../../../lib/board-cookies";
 import { compareTaskRank, enhancementOutcomes, severities, taskStatus, taskStatuses, withoutEntryBranches, type Entry, type Kind, type Severity } from "../../../lib/board";
@@ -29,6 +31,23 @@ export async function GET(request: Request) {
   const team = teamFor(request);
   const number = team.number;
   const db = getDb();
+  if (new URL(request.url).searchParams.get("report") === "adoption") {
+    if (number !== DEFAULT_TEAM) return response({ error: "The adoption report is available to Protostars." }, 403);
+    const teams = await db.all<{ number: string; name: string; claimed: number; problems: number; inspirations: number; tasks: number }>(sql`
+      select team.number, team.name, team.claimed_at is not null as claimed,
+        (select count(*) from contributions c where c.team = team.number and c.kind = 'problem'
+          and not exists (select 1 from contributions d where d.team = c.team and d.id = 'deleted:' || c.id)) as problems,
+        (select count(*) from contributions c where c.team = team.number and c.kind = 'inspiration'
+          and not exists (select 1 from contributions d where d.team = c.team and d.id = 'deleted:' || c.id)) as inspirations,
+        (select count(*) from todos t
+          join contributions i on i.team = t.team and i.id = t.idea_id and i.kind = 'idea'
+          join contributions c on c.team = i.team and c.id = i.parent
+          where t.team = team.number
+          and not exists (select 1 from contributions d where d.team = t.team and d.id in ('deleted:' || i.id, 'deleted:' || c.id))) as tasks
+      from workshop_teams team order by team.claimed_at is null, team.name collate nocase, team.number
+    `);
+    return response({ teams: teams.map(team => ({ ...team, claimed: Boolean(team.claimed) })) });
+  }
   const [rows, tasks, roster] = await Promise.all([
     db.select().from(contributions).where(eq(contributions.team, number)).orderBy(asc(contributions.created), asc(contributions.id)),
     db.select().from(todos).where(eq(todos.team, number)).orderBy(asc(todos.created), asc(todos.ideaId)),
@@ -64,7 +83,7 @@ export async function GET(request: Request) {
     names.set(key, name);
   }
   const knownNames = [...names.values()].sort((a, b) => a.localeCompare(b));
-  const result = response({ version: 1, team: number, teamInfo: teamInfo(team), entries: [...byId.values()], displayName: name, ownCommentIds, knownNames,
+  const result = response({ version: 1, team: number, teamInfo: teamInfo(team), canManageTeams: number === DEFAULT_TEAM, entries: [...byId.values()], displayName: name, ownCommentIds, knownNames,
     todos: tasks.filter(task => byId.get(task.ideaId)?.kind === "idea").map(task => ({ ...task, assignee: task.assignee && currentName(task.assignee) })) });
   if (name !== previousName) result.headers.set("Set-Cookie", boardCookie(NAME_COOKIE, name));
   return result;
@@ -186,6 +205,19 @@ export async function POST(request: Request) {
   const input = await readInput(request);
   if (input instanceof Response) return input;
   const db = getDb();
+  if (input.action === "invite-team") {
+    if (number !== DEFAULT_TEAM) return response({ error: "Only Protostars can invite a new team." }, 403);
+    const teamNumber = trim(input.teamNumber);
+    const name = trim(input.teamName);
+    const message = trim(input.message);
+    if (!/^[1-9][0-9]{0,11}$/.test(teamNumber) || !name || name.length > 120 || message.length > 1000) {
+      return response({ error: "Enter a team name and number, and keep the message under 1,000 characters." }, 400);
+    }
+    if (!env.DB) throw new Error("Workshop database unavailable");
+    const token = await issueTeamInvite(env.DB, teamNumber, name, message);
+    return token ? response({ url: workshopInviteLink(token) }, 201)
+      : response({ error: "That team number already has a board or a pending invite under a different name." }, 409);
+  }
   if (input.action === "set-display-name" || input.action === "rename-display-name") {
     const proposed = normalizeDisplayName(trim(input.author));
     if (!proposed || proposed.length > 50 || displayNameKey(proposed) === "competition debrief") {

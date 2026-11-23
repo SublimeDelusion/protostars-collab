@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Board from "../app/board";
-import { INVITE_HEADER, NAME_HEADER } from "../lib/pages-origin";
+import { CLAIM_HEADER, INVITE_HEADER, NAME_HEADER } from "../lib/pages-origin";
 import "../app/globals.css";
 
 const backend = "https://ftc-17097-debrief.hopefulbeam4.chatgpt.site";
@@ -39,6 +39,7 @@ function Pages() {
   const connection = useRef(0);
   const [request, setRequest] = useState<typeof fetch>();
   const [status, setStatus] = useState("");
+  const [welcome, setWelcome] = useState("");
   const [initialKey] = useState(() => {
     const invite = new URLSearchParams(location.hash.slice(1)).get("invite");
     const saved = localStorage.getItem(inviteKey);
@@ -60,18 +61,44 @@ function Pages() {
     const attempt = ++connection.current;
     setRequest(undefined);
     setStatus("");
+    setWelcome("");
     setBusy(true);
     try {
-      const send = requestFor(key);
-      const response = await send("/api/board");
+      let activeKey = key;
+      let send = requestFor(key);
+      let response = await send("/api/board");
       if (connection.current !== attempt) return;
+      if (response.status === 404 && new URLSearchParams(location.hash.slice(1)).get("invite") === key) {
+        const claimKey = inviteKey + ":claim:" + key;
+        const access = localStorage.getItem(claimKey) ?? crypto.randomUUID() + crypto.randomUUID();
+        localStorage.setItem(claimKey, access);
+        const claim = await fetch(backend + "/api/board?join=team", {
+          method: "POST",
+          headers: { [INVITE_HEADER]: key, [CLAIM_HEADER]: access },
+          credentials: "omit",
+        });
+        if (connection.current !== attempt) return;
+        if (claim.ok) {
+          const { message } = await claim.json() as { message: string };
+          send = requestFor(access);
+          response = await send("/api/board");
+          if (connection.current !== attempt) return;
+          if (!response.ok) throw new Error();
+          activeKey = access;
+          localStorage.setItem(inviteKey, activeKey);
+          setWelcome(message);
+        } else if (claim.status !== 404) {
+          throw new Error();
+        }
+        localStorage.removeItem(claimKey);
+      }
       if (response.status === 404) {
         if (localStorage.getItem(inviteKey) === key) localStorage.removeItem(inviteKey);
         setStatus("This invite didn’t work. Ask your team for the current link.");
         return;
       }
       if (!response.ok) throw new Error();
-      localStorage.setItem(inviteKey, key);
+      localStorage.setItem(inviteKey, activeKey);
       if (new URLSearchParams(location.hash.slice(1)).has("invite")) {
         history.replaceState(history.state, "", location.pathname + location.search);
       }
@@ -80,7 +107,7 @@ function Pages() {
       if (connection.current === attempt) setStatus("Couldn’t connect to the board. Refresh to try again.");
     } finally { if (connection.current === attempt) setBusy(false); }
   }
-  if (request) return <Board initialEntries={[]} request={request} root="./" assetOrigin={backend} />;
+  if (request) return <Board initialEntries={[]} request={request} root="./" assetOrigin={backend} welcome={welcome} dismissWelcome={() => setWelcome("")} />;
   return <>
     <header className="top"><div className="wrap bar"><a href="./" className="brand"><img src="./protostars.jpg" width="48" height="48" alt="" /><span>Protostars<small>FIRST TECH CHALLENGE · TEAM 17097</small></span></a></div></header>
     <main className="wrap">

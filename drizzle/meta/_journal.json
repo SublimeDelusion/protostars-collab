@@ -71,6 +71,13 @@
       "when": 1795415123649,
       "tag": "0009_display_name_renames",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795416888103,
+      "tag": "0010_workshop_team_invites",
+      "breakpoints": true
     }
   ]
 }

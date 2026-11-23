@@ -34,3 +34,17 @@ export const people = sqliteTable("people", {
   name: text().notNull(),
   renamedTo: text("renamed_to"),
 }, table => [primaryKey({ columns: [table.team, table.key] })]);
+
+export const workshopTeams = sqliteTable("workshop_teams", {
+  number: text().primaryKey(),
+  name: text().notNull(),
+  accessHash: text("access_hash").unique(),
+  claimedAt: text("claimed_at"),
+});
+
+export const teamInvites = sqliteTable("team_invites", {
+  tokenHash: text("token_hash").primaryKey(),
+  team: text().notNull().references(() => workshopTeams.number),
+  message: text().notNull(),
+  issuedAt: text("issued_at").notNull(),
+});

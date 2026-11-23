@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { compareTaskRank, enhancementOutcomes, enhancementOutcomeLabels, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
+import { compareTaskRank, enhancementOutcomes, enhancementOutcomeLabels, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type AdoptionRow, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
 import { publishedAt } from "../lib/release";
 import { displayNameKey } from "../lib/board-cookies";
@@ -157,9 +157,18 @@ function EditButton({ entry, disabled, onClick, label }: { entry: Entry; disable
 }
 
 export default function Board({
-  initialEntries, request = fetch, root = "/", assetOrigin = "",
-}: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string }) {
+  initialEntries, request = fetch, root = "/", assetOrigin = "", welcome = "", dismissWelcome,
+}: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string; welcome?: string; dismissWelcome?: () => void }) {
   const [team, setTeam] = useState<TeamInfo>();
+  const [canManageTeams, setCanManageTeams] = useState(false);
+  const inviteDialog = useRef<HTMLDialogElement>(null);
+  const adoptionDialog = useRef<HTMLDialogElement>(null);
+  const [issuedInvite, setIssuedInvite] = useState("");
+  const [inviteError, setInviteError] = useState("");
+  const [issuingInvite, setIssuingInvite] = useState(false);
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const [adoption, setAdoption] = useState<AdoptionRow[]>();
+  const [adoptionError, setAdoptionError] = useState("");
   const [entries, setEntries] = useState(initialEntries);
   const [tab, setTab] = useState<keyof typeof boardSections>("inspiration");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -211,8 +220,8 @@ export default function Board({
       try {
         const res = await request("/api/board", { cache: "no-store" });
         if (!res.ok) throw new Error();
-        const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[]; teamInfo?: TeamInfo };
-        if (active && revision === boardRevision.current && number > latestResult) { latestResult = number; setTeam(data.teamInfo); setEntries(data.entries); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
+        const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[]; teamInfo?: TeamInfo; canManageTeams?: boolean };
+        if (active && revision === boardRevision.current && number > latestResult) { latestResult = number; setTeam(data.teamInfo); setCanManageTeams(Boolean(data.canManageTeams)); setEntries(data.entries); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
       } catch { if (active && revision === boardRevision.current && number > latestResult) { latestResult = number; setReady(false); setNotice("The shared board is unavailable. Reconnecting…"); } }
     }
     void refresh();
@@ -396,6 +405,42 @@ export default function Board({
       link.href = url; link.download = `ftc-${team}-board.json`; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { setNotice("Couldn't download the shared board. Please try again."); }
+  }
+
+  function openTeamInvite() {
+    setIssuedInvite("");
+    setInviteError("");
+    setInviteCopied(false);
+    setMenuOpen(false);
+    inviteDialog.current?.showModal();
+  }
+
+  async function createTeamInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (issuingInvite) return;
+    const fields = new FormData(event.currentTarget);
+    setIssuingInvite(true);
+    setInviteError("");
+    try {
+      const res = await request("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        action: "invite-team", teamName: fields.get("teamName"), teamNumber: fields.get("teamNumber"), message: fields.get("message"),
+      }) });
+      if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not create the invite. Try again.");
+      const { url } = await res.json() as { url: string };
+      setIssuedInvite(url);
+    } catch (error) { setInviteError(error instanceof Error ? error.message : "Could not create the invite. Try again."); }
+    finally { setIssuingInvite(false); }
+  }
+
+  async function openAdoption() {
+    setAdoption(undefined);
+    setAdoptionError("");
+    adoptionDialog.current?.showModal();
+    try {
+      const res = await request("/api/board?report=adoption", { cache: "no-store" });
+      if (!res.ok) throw new Error();
+      setAdoption((await res.json() as { teams: AdoptionRow[] }).teams);
+    } catch { setAdoptionError("Could not load the adoption report. Try again."); }
   }
 
   async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-status"; status: TaskStatus } | { action: "move-todo"; status: TaskStatus; before?: string; assignee?: string | null }) {
@@ -760,20 +805,37 @@ export default function Board({
       <div className="workshop-menu" id="workshop-menu">
       <nav className="tabs mobile-nav" aria-label="Workshop sections">{navigationButtons(true)}</nav>
       <div className="tools header-tools">
-      <button className="quiet header-share" aria-label="Invite a teammate" title="Copy team invite link" onClick={() => { setMenuOpen(false); void copyInvite(); }} disabled={!ready || copying}>
+      <details className="invite-menu">
+      <summary className="quiet header-share">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
           <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
         </svg>
         Invite
-      </button>
-      <button className="quiet" onClick={() => { setMenuOpen(false); void download(); }} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button>
+        <svg className="menu-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+      </summary>
+      <div className="profile-actions">
+        <button type="button" className="quiet" disabled={!ready || copying} onClick={event => {
+          event.currentTarget.closest("details")?.removeAttribute("open");
+          setMenuOpen(false);
+          void copyInvite();
+        }}>Copy teammate invite link</button>
+        {canManageTeams && <button type="button" className="quiet" disabled={!ready} onClick={event => {
+          event.currentTarget.closest("details")?.removeAttribute("open");
+          openTeamInvite();
+        }}>Invite a new team</button>}
+      </div>
+      </details>
       {name ? <details className="profile-menu" onKeyDown={event => {
         if (event.key !== "Escape" || !event.currentTarget.open) return;
         event.stopPropagation();
         event.currentTarget.open = false;
         event.currentTarget.querySelector("summary")?.focus();
       }}>
-        <summary className="quiet"><span>{name}</span><span aria-hidden="true">⌄</span></summary>
+        <summary className="quiet">
+          <svg className="profile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20v-1a7 7 0 0 1 14 0v1"/></svg>
+          <span className="profile-name">{name}</span>
+          <svg className="menu-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+        </summary>
         <div className="profile-actions"><button type="button" className="quiet" disabled={!ready} onClick={event => {
           const profile = event.currentTarget.closest("details");
           if (profile) profile.open = false;
@@ -785,6 +847,7 @@ export default function Board({
       </div>
     </div></header>
     <main className={`wrap${showProblemDetail ? " mobile-problem-open" : ""}`}>
+      {welcome && <div className="notice workshop-welcome"><p>{welcome}</p><button type="button" className="quiet" onClick={dismissWelcome}>Dismiss</button></div>}
       <section className="hero">
         <div><h1>FTC Workshop</h1><p className="workshop-credit">by Team 17097 Protostars</p></div>
         <div className="stats" aria-label="Board shortcuts">
@@ -1012,11 +1075,48 @@ export default function Board({
           <div>{team ? `Team ${team.number} ${team.name}` : "Team 17097 Protostars"}</div>
           <div>Last updated <time dateTime={publishedAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/Denver" }).format(new Date(publishedAt))}</time></div>
         </div>
-        <button type="button" className="quiet small" aria-current={tab === "enhancement" ? "page" : undefined} onClick={() => {
-          navigate("enhancement", true);
-        }}>App enhancements</button>
+        <div className="footer-actions">
+          {canManageTeams && <button type="button" className="quiet" disabled={!ready} onClick={() => void openAdoption()}>Adoption</button>}
+          <button type="button" className="quiet" disabled={!ready} onClick={() => void download()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button>
+          <button type="button" className="quiet" aria-current={tab === "enhancement" ? "page" : undefined} onClick={() => navigate("enhancement", true)}>App enhancements</button>
+        </div>
       </footer>
     </main>
+    <dialog ref={inviteDialog} aria-labelledby="team-invite-title" onCancel={event => { if (issuingInvite) event.preventDefault(); }}>
+      <h2 id="team-invite-title">{issuedInvite ? "Team invite ready" : "Invite a new team"}</h2>
+      {issuedInvite ? <>
+        <p>Send this link to the team you’re inviting. They’ll use it to claim their own Workshop board.</p>
+        <label>Invite link<input readOnly value={issuedInvite} onFocus={event => event.currentTarget.select()} /></label>
+        {inviteCopied && <p className="notice" role="status">Invite link copied.</p>}
+        {inviteError && <p className="notice" role="alert">{inviteError}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="quiet" onClick={() => inviteDialog.current?.close()}>OK</button>
+          <button type="button" className="primary" onClick={async () => {
+            setInviteError("");
+            try { await navigator.clipboard.writeText(issuedInvite); setInviteCopied(true); }
+            catch { setInviteError("Select the invite link above to copy it."); }
+          }}>Copy invite link</button>
+        </div>
+      </> : <form onSubmit={createTeamInvite}>
+        <label>Team name<input name="teamName" required maxLength={120} /></label>
+        <label>Team number<input name="teamNumber" required inputMode="numeric" pattern="[1-9][0-9]{0,11}" maxLength={12} /></label>
+        <label>Message (optional)<textarea name="message" rows={3} maxLength={1000} /></label>
+        {inviteError && <p className="notice" role="alert">{inviteError}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="quiet" disabled={issuingInvite} onClick={() => inviteDialog.current?.close()}>Cancel</button>
+          <button className="primary" disabled={issuingInvite}>{issuingInvite ? "Saving…" : "Save"}</button>
+        </div>
+      </form>}
+    </dialog>
+    <dialog ref={adoptionDialog} className="adoption-dialog" aria-labelledby="adoption-title">
+      <h2 id="adoption-title">Workshop adoption</h2>
+      {adoptionError ? <p className="notice" role="alert">{adoptionError}</p> : !adoption ? <p role="status">Loading adoption report…</p>
+        : adoption.length ? <div className="adoption-table"><table>
+          <thead><tr><th scope="col">Team</th><th scope="col">Status</th><th scope="col">Problems</th><th scope="col">Inspirations</th><th scope="col">Tasks</th></tr></thead>
+          <tbody>{adoption.map(row => <tr key={row.number}><th scope="row">{row.name} <span className="meta">#{row.number}</span></th><td>{row.claimed ? "Joined" : "Invited"}</td><td>{row.problems}</td><td>{row.inspirations}</td><td>{row.tasks}</td></tr>)}</tbody>
+        </table></div> : <p>No teams invited yet.</p>}
+      <div className="dialog-actions"><button type="button" className="quiet" onClick={() => adoptionDialog.current?.close()}>Close</button></div>
+    </dialog>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
       {assignment && <form onSubmit={event => {
         event.preventDefault();
