@@ -302,7 +302,7 @@ export default function Board({
   const enhancementRequests = entries.filter(e => e.kind === "enhancement" && matches(e));
   const visible = (e: Entry) => matches(e) || childrenOf(e.id).some(matches);
   const resolutions = new Map(entries.filter(e => e.kind === "resolution" && e.active).map(e => [e.parent, e]));
-  const shown = problems.filter(visible);
+  const shown = problems.filter(visible).sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
   const activeProblems = shown.filter(p => !resolutions.has(p.id)).sort((a, b) => severities.indexOf(a.severity ?? "medium") - severities.indexOf(b.severity ?? "medium"));
   const solvedProblems = shown.filter(p => resolutions.has(p.id));
   const current = shown.find(p => p.id === selected) ?? activeProblems[0] ?? solvedProblems[0];
