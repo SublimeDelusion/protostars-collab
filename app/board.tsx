@@ -22,6 +22,11 @@ const boardSections = {
     search: "Find a to-do",
     description: "Assign and check off work queued from the Idea Lab or Virtual Pit.",
   },
+  activity: {
+    title: "Recent activity",
+    search: "Find activity",
+    description: "See what teammates have added, discussed, and starred.",
+  },
   enhancement: {
     title: "App enhancements",
     search: "Find a request",
@@ -38,6 +43,19 @@ const untitled = (kind: Kind) => ["comment", "test", "vote", "resolution"].inclu
 const update = (list: Entry[], next: Entry[]) => [...new Map([...list, ...next].map(e => [e.id, e])).values()];
 
 const severityLabels: Record<Severity | "resolved", string> = { high: "High", medium: "Medium", low: "Low", resolved: "Resolved" };
+
+const activityVerbs: Partial<Record<Kind, string>> = {
+  problem: "posted a problem",
+  inspiration: "shared inspiration",
+  idea: "added an idea",
+  enhancement: "requested an enhancement",
+  comment: "commented on",
+  vote: "starred",
+};
+
+const activityDate = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium", timeStyle: "short", timeZone: "America/Denver",
+});
 
 function ProblemStatus({ status, full = false }: { status: Severity | "resolved"; full?: boolean }) {
   const label = severityLabels[status];
@@ -136,7 +154,7 @@ export default function Board({
   }, [draft]);
   useEffect(() => {
     if (!jump) return;
-    const target = document.getElementById("idea-toggle-" + jump);
+    const target = document.getElementById(jump);
     target?.focus({ preventScroll: true });
     target?.scrollIntoView({ block: "center" });
     setJump(undefined);
@@ -388,12 +406,38 @@ export default function Board({
     })?.dataset.taskId;
   }
 
-  function showIdea(idea: Entry, parent: Entry) {
+  const recentActivity = tab === "activity" ? entries.flatMap(entry => {
+    if (entry.source || !activityVerbs[entry.kind]) return [];
+    const target = entry.kind === "comment" || entry.kind === "vote"
+      ? lookup.get(entry.parent ?? "") : entry;
+    if (!target) return [];
+    const action = entry.starred && entry.kind === "comment" ? "starred and commented on" : activityVerbs[entry.kind];
+    const query = search.trim().toLowerCase();
+    if (!`${entry.author} ${action} ${target.title} ${entry.body}`.toLowerCase().includes(query)) return [];
+    return [{ entry, target, action }];
+  }).sort((a, b) => b.entry.created.localeCompare(a.entry.created)).slice(0, 50) : [];
+
+  function showIdea(idea: Entry, parent: Entry, focusId = "idea-toggle-" + idea.id) {
     setSearch("");
     setTab(parent.kind === "problem" ? "problem" : "inspiration");
     if (parent.kind === "problem") setSelected(parent.id);
     expand(idea.id);
-    setJump(idea.id);
+    setJump(focusId);
+  }
+
+  function showActivity(entry: Entry, target: Entry) {
+    const focusId = entry.kind === "comment" ? "comment-" + entry.id : undefined;
+    if (target.kind === "idea") {
+      const parent = lookup.get(target.parent ?? "");
+      if (parent) showIdea(target, parent, focusId);
+      return;
+    }
+    if (target.kind === "problem") setSelected(target.id);
+    if (target.kind === "problem" || target.kind === "inspiration" || target.kind === "enhancement") {
+      setSearch("");
+      setTab(target.kind);
+      setJump(focusId ?? "entry-" + target.id);
+    }
   }
 
   const resolution = current ? resolutions.get(current.id) : undefined;
@@ -420,7 +464,7 @@ export default function Board({
   function logEntry(e: Entry) {
     const mine = ownCommentIds.includes(e.id);
     const historyLabel = e.kind === "completion" ? "Completion note" : undefined;
-    return <div className="comment" key={e.id}>
+    return <div className="comment" key={e.id} id={`comment-${e.id}`} tabIndex={-1}>
       <div className={mine ? "editable-entry" : undefined}>
         {e.starred && <span className="comment-star" role="img" aria-label="Starred this idea" title="Starred this idea">★</span>}
         {historyLabel && <span className="history-label">{historyLabel}</span>}
@@ -540,7 +584,7 @@ export default function Board({
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Workshop navigation">
         <div className="tabs">
-          {(["inspiration", "problem", "todo"] as const).map(key => <button key={key}
+          {(["inspiration", "problem", "todo", "activity"] as const).map(key => <button key={key}
             className={tab === key ? "active" : ""} aria-pressed={tab === key}
             onClick={() => { setTab(key); setSearch(""); }}>{boardSections[key].title}</button>)}
         </div>
@@ -548,7 +592,7 @@ export default function Board({
         <div className="tools">
           <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
           {tab === "todo" && <button className="quiet assignee-toggle" aria-pressed={swimlanes} onClick={() => setSwimlanes(active => !active)}>By assignee</button>}
-          {tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
+          {tab !== "todo" && tab !== "activity" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
         </div>
       </section>
       <section aria-labelledby="board-section-title">
@@ -567,7 +611,7 @@ export default function Board({
             {problemLinks(solvedProblems, true)}
             {!solvedProblems.length && <p className="empty">No solved problems{search ? " match" : " yet"}.</p>}
           </aside>
-          {current && <section className="detail" aria-label="Selected problem">
+          {current && <section className="detail" aria-label="Selected problem" id={`entry-${current.id}`} tabIndex={-1}>
             <div className="problem-card-toolbar">
               <span className="eyebrow">PROBLEM</span>
               <label className="severity-control">
@@ -599,7 +643,7 @@ export default function Board({
             {ideaCards(current)}
           </section>}
         </div> : tab === "inspiration" ? <div className="inspiration">
-          <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id}>
+          <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id} id={`entry-${i.id}`} tabIndex={-1}>
             <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><EntrySource entry={i} /><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
             {discussion(i, entries.filter(e => e.kind === "comment" && e.parent === i.id))}
             {ideaCards(i)}
@@ -608,7 +652,7 @@ export default function Board({
         </div> : tab === "enhancement" ? <div className="enhancements">
           {enhancementRequests.map(entry => {
             const activity = entries.filter(item => item.parent === entry.id);
-            return <article className="detail enhancement-card" key={entry.id} aria-labelledby={`request-${entry.id}`}>
+            return <article className="detail enhancement-card" key={entry.id} id={`entry-${entry.id}`} tabIndex={-1} aria-labelledby={`request-${entry.id}`}>
               <div className="enhancement-heading">
                 <div className="editable-entry">
                   <h3 id={`request-${entry.id}`}>{entry.title}</h3>
@@ -622,7 +666,18 @@ export default function Board({
             </article>;
           })}
           {!enhancementRequests.length && <p className="empty">{search.trim() ? "No matching requests." : "No enhancement requests yet."}</p>}
-        </div> : <div className="kanban-lanes">{lanes.map((lane, laneIndex) => <div className="kanban-lane" key={lane}>
+        </div> : tab === "activity" ? (
+          recentActivity.length ? <ol className="activity-feed">
+            {recentActivity.map(({ entry, target, action }) => <li className="detail activity-item" key={entry.id}>
+              <div className="activity-meta">
+                <span><strong>{entry.author}</strong> {action}</span>
+                <time dateTime={entry.created} title="Mountain time">{activityDate.format(new Date(entry.created))} MT</time>
+              </div>
+              <button type="button" className="todo-link" onClick={() => showActivity(entry, target)}>{target.title}</button>
+              {entry.body && <p className="body activity-preview">{entry.body}</p>}
+            </li>)}
+          </ol> : <p className="empty">{search.trim() ? "No matching activity." : ready ? "No recent activity yet." : "Loading recent activity…"}</p>
+        ) : <div className="kanban-lanes">{lanes.map((lane, laneIndex) => <div className="kanban-lane" key={lane}>
           {swimlanes && <h3>{lane || "Unassigned"}</h3>}
           <div className="kanban">
           {taskStatuses.map(status => {
