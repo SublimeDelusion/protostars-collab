@@ -53,6 +53,10 @@ function CheckIcon() {
   return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 12 5 5L20 6" /></svg>;
 }
 
+function EntrySource({ entry }: { entry: Entry }) {
+  return <p className="entry-source">Source: {entry.source ?? entry.author}</p>;
+}
+
 function EditButton({ entry, disabled, onClick, label }: { entry: Entry; disabled: boolean; onClick: () => void; label?: string }) {
   return <button type="button" className="edit-pencil" aria-label={label ?? (entry.kind === "comment" ? "Edit your comment" : `Edit ${entry.kind}: ${entry.title}`)} title={label ?? (entry.kind === "comment" ? "Edit your comment" : "Edit title and description")} disabled={disabled} onClick={onClick}>
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>
@@ -344,7 +348,7 @@ export default function Board({
             </div>
           </div>
           <div id={"idea-" + i.id} hidden={!isOpen} className="idea-body">
-            <div className="editable-entry idea-description"><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
+            <div className="editable-entry idea-description"><p className="body">{i.body}</p><EntrySource entry={i} /><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
             {discussion(i, comments)}
             {isProblem && <section className="discussion">
               <div className="discussion-head"><h4>Tests</h4><button className="quiet small" disabled={!ready} onClick={logTest}>＋ Log test</button></div>
@@ -407,7 +411,7 @@ export default function Board({
               <div className="problem-meta"><span className="eyebrow">PROBLEM</span><ProblemStatus status={resolution ? "resolved" : current.severity ?? "medium"} full /></div><h3>{current.title}</h3><p className="body">{current.body}</p>
               <EditButton entry={current} disabled={!ready} onClick={() => edit(current)} />
             </div>
-            {current.author !== "Competition debrief" && <p className="meta">Added by {current.author}</p>}
+            <EntrySource entry={current} />
             {resolution && solution && <div className="resolution-panel">
               <div className="discussion-head"><h4>✓ Resolution</h4><button className="quiet small" disabled={!ready || saving || !name} onClick={() => void reopen(current)}>Reopen problem</button></div>
               <button type="button" className="quiet small" onClick={() => expand(solution.id)}>{solution.title}</button>
@@ -417,7 +421,7 @@ export default function Board({
           </section>}
         </div> : tab === "inspiration" ? <div className="inspiration">
           <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id}>
-            <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
+            <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><EntrySource entry={i} /><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
             {discussion(i, entries.filter(e => e.kind === "comment" && e.parent === i.id))}
             {ideaCards(i)}
           </article>)}</div>
