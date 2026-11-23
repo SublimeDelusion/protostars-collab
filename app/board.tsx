@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
 import { compareTaskRank, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
 import { publishedAt } from "../lib/release";
@@ -35,6 +35,17 @@ const boardSections = {
 } as const;
 
 type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean };
+type TouchDrag = {
+  pointerId: number;
+  taskId: string;
+  title: string;
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  active: boolean;
+  frame?: number;
+};
 const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", enhancement: "enhancement request", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
 const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", resolution: "Close problem" };
 const actionNotes: Partial<Record<Kind, string>> = { test: "What did you test, and what happened?", resolution: "Resolution description" };
@@ -101,6 +112,8 @@ export default function Board({
   const [swimlanes, setSwimlanes] = useState(false);
   const [draggedTask, setDraggedTask] = useState<string>();
   const [dropTarget, setDropTarget] = useState<{ column: string; before?: string }>();
+  const touchDrag = useRef<TouchDrag | undefined>(undefined);
+  const [dragPreview, setDragPreview] = useState<{ title: string; x: number; y: number }>();
   const [problemEdit, setProblemEdit] = useState<{ id: string; field: "title" | "body" }>();
   const [pendingTodo, setPendingTodo] = useState<string>();
   const [assignment, setAssignment] = useState<Entry>();
@@ -168,6 +181,10 @@ export default function Board({
   useEffect(() => {
     if (team) document.title = "FTC Workshop | " + team.name;
   }, [team]);
+
+  useEffect(() => () => {
+    if (touchDrag.current?.frame !== undefined) cancelAnimationFrame(touchDrag.current.frame);
+  }, []);
 
   function openAssignment(idea: Entry) {
     setAssignmentError("");
@@ -386,24 +403,97 @@ export default function Board({
   }
 
   function clearTaskDrag() {
+    if (touchDrag.current?.frame !== undefined) cancelAnimationFrame(touchDrag.current.frame);
+    touchDrag.current = undefined;
     setDraggedTask(undefined);
     setDropTarget(undefined);
+    setDragPreview(undefined);
   }
 
-  function dropTask(status: TaskStatus, lane: string, before?: string) {
-    const task = draggedTask && todoByIdea.get(draggedTask);
+  function dropTask(taskId: string, status: TaskStatus, lane: string, before?: string) {
+    const task = todoByIdea.get(taskId);
     clearTaskDrag();
     if (!task || task.ideaId === before) return;
     void saveTodo(task.ideaId, { action: "move-todo", status, before, ...(swimlanes ? { assignee: lane || null } : {}) });
   }
 
-  function insertionPoint(column: HTMLElement, y: number) {
+  function insertionPoint(column: HTMLElement, y: number, taskId: string) {
     const cards = Array.from(column.querySelectorAll<HTMLElement>("[data-task-id]"));
     return cards.find(card => {
-      if (card.dataset.taskId === draggedTask) return false;
+      if (card.dataset.taskId === taskId) return false;
       const bounds = card.getBoundingClientRect();
       return y < bounds.top + bounds.height / 2;
     })?.dataset.taskId;
+  }
+
+  function highlightDrop(column: string, before?: string) {
+    setDropTarget(target => target?.column === column && target.before === before ? target : { column, before });
+  }
+
+  function touchDropColumn(x: number, y: number) {
+    return document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-kanban-column]");
+  }
+
+  function updateTouchTarget(drag: TouchDrag) {
+    const column = touchDropColumn(drag.x, drag.y);
+    if (column?.dataset.kanbanColumn) {
+      highlightDrop(column.dataset.kanbanColumn, insertionPoint(column, drag.y, drag.taskId));
+    } else {
+      setDropTarget(undefined);
+    }
+  }
+
+  function scrollDuringDrag(drag: TouchDrag) {
+    if (touchDrag.current !== drag) return;
+    const edge = 64;
+    const top = Math.max(0, edge - drag.y);
+    const bottom = Math.max(0, drag.y - (window.innerHeight - edge));
+    if (top || bottom) {
+      const previous = window.scrollY;
+      window.scrollBy({ top: (bottom - top) / 3, behavior: "instant" });
+      if (window.scrollY !== previous) updateTouchTarget(drag);
+    }
+    drag.frame = requestAnimationFrame(() => scrollDuringDrag(drag));
+  }
+
+  function startTouchDrag(event: PointerEvent<HTMLDivElement>, idea: Entry) {
+    if (event.pointerType === "mouse" || !event.isPrimary || !ready || pendingTodo || touchDrag.current) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    touchDrag.current = {
+      pointerId: event.pointerId, taskId: idea.id, title: idea.title,
+      startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false,
+    };
+  }
+
+  function moveTouchDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = touchDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    if (!drag.active) {
+      if (Math.hypot(drag.x - drag.startX, drag.y - drag.startY) < 8) return;
+      drag.active = true;
+      setDraggedTask(drag.taskId);
+      drag.frame = requestAnimationFrame(() => scrollDuringDrag(drag));
+    }
+    setDragPreview({ title: drag.title, x: drag.x, y: drag.y });
+    updateTouchTarget(drag);
+  }
+
+  function finishTouchDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = touchDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const column = drag.active ? touchDropColumn(event.clientX, event.clientY) : undefined;
+    const status = taskStatuses.find(value => value === column?.dataset.kanbanStatus);
+    if (column && status) {
+      dropTask(drag.taskId, status, column.dataset.kanbanLane ?? "", insertionPoint(column, event.clientY, drag.taskId));
+    } else {
+      clearTaskDrag();
+    }
+  }
+
+  function cancelTouchDrag(event: PointerEvent<HTMLDivElement>) {
+    if (touchDrag.current?.pointerId === event.pointerId) clearTaskDrag();
   }
 
   const recentActivity = tab === "activity" ? entries.flatMap(entry => {
@@ -685,13 +775,12 @@ export default function Board({
             const columnId = `tasks-${laneIndex}-${status}`;
             const activeDrop = draggedTask && dropTarget?.column === columnId ? dropTarget : undefined;
             return <section className={`kanban-column${activeDrop ? " drop-target" : ""}${activeDrop && !activeDrop.before ? " insert-at-end" : ""}`}
-              key={status} aria-labelledby={columnId}
+              key={status} aria-labelledby={columnId} data-kanban-column={columnId} data-kanban-status={status} data-kanban-lane={lane}
               onDragOver={event => {
                 if (!draggedTask) return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
-                const before = insertionPoint(event.currentTarget, event.clientY);
-                setDropTarget(target => target?.column === columnId && target.before === before ? target : { column: columnId, before });
+                highlightDrop(columnId, insertionPoint(event.currentTarget, event.clientY, draggedTask));
               }}
               onDragLeave={event => {
                 if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
@@ -700,7 +789,7 @@ export default function Board({
               onDrop={event => {
                 if (!draggedTask) return;
                 event.preventDefault();
-                dropTask(status, lane, insertionPoint(event.currentTarget, event.clientY));
+                dropTask(draggedTask, status, lane, insertionPoint(event.currentTarget, event.clientY, draggedTask));
               }}>
               <h3 id={columnId}>{taskStatusLabels[status]} <small className="meta">{items.length}</small></h3>
               {!items.length && <p className="meta">{search.trim() ? "No matching tasks." : "No tasks here yet."}</p>}
@@ -708,6 +797,7 @@ export default function Board({
                 data-task-id={idea.id} key={idea.id}
                 draggable={ready && !pendingTodo}
                 onDragStart={event => {
+                  if (touchDrag.current) { event.preventDefault(); return; }
                   event.dataTransfer.setData("text/plain", idea.title);
                   event.dataTransfer.effectAllowed = "move";
                   setDraggedTask(idea.id);
@@ -721,6 +811,15 @@ export default function Board({
                       disabled={!ready || Boolean(pendingTodo) || index === items.length - 1}
                       onClick={() => void saveTodo(idea.id, { action: "move-todo", status, before: items[index + 2]?.idea.id })}>↓</button>
                   </div>
+                <div className="task-drag-handle" aria-hidden="true" data-enabled={ready && !pendingTodo}
+                  onPointerDown={event => startTouchDrag(event, idea)}
+                  onPointerMove={moveTouchDrag} onPointerUp={finishTouchDrag}
+                  onPointerCancel={cancelTouchDrag} onLostPointerCapture={cancelTouchDrag}
+                  onContextMenu={event => event.preventDefault()}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    {[6, 12, 18].flatMap(cy => [9, 15].map(cx => <circle key={cx + "," + cy} cx={cx} cy={cy} r="1.5" />))}
+                  </svg>
+                </div>
                 <div className="kanban-card-content">
                 <button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button>
                 <p className="meta">{parent.title}</p>
@@ -742,6 +841,10 @@ export default function Board({
           })}
           </div>
         </div>)}</div>}
+        {dragPreview && <div aria-hidden="true" className="task-drag-preview" style={{
+          left: Math.max(10, Math.min(dragPreview.x - 24, window.innerWidth - 230)),
+          top: Math.max(8, dragPreview.y - 58),
+        }}>{dragPreview.title}</div>}
       </section>
       <footer className="workshop-footer">
         <div>
