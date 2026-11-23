@@ -22,10 +22,10 @@ const boardSections = {
 
 type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean };
 const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
-const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", vote: "Star this idea", resolution: "Select as solution", completion: "Mark idea complete" };
-const actionNotes: Partial<Record<Kind, string>> = { test: "What did you test, and what happened?", resolution: "Resolution", completion: "What did we do?" };
-const actionSaves: Partial<Record<Kind, string>> = { test: "Log test", vote: "Add star", resolution: "Resolve problem", completion: "Mark complete" };
-const untitled = (kind: Kind) => ["comment", "test", "vote", "resolution", "completion"].includes(kind);
+const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", vote: "Star this idea", resolution: "Close problem" };
+const actionNotes: Partial<Record<Kind, string>> = { test: "What did you test, and what happened?", resolution: "Resolution description" };
+const actionSaves: Partial<Record<Kind, string>> = { test: "Log test", vote: "Add star", resolution: "Mark as solved" };
+const untitled = (kind: Kind) => ["comment", "test", "vote", "resolution"].includes(kind);
 const update = (list: Entry[], next: Entry[]) => [...new Map([...list, ...next].map(e => [e.id, e])).values()];
 
 const severityLabels: Record<Severity | "resolved", string> = { high: "High", medium: "Medium", low: "Low", resolved: "Resolved" };
@@ -95,6 +95,7 @@ export default function Board({
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [notice, setNotice] = useState("");
+  const [copying, setCopying] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const boardRevision = useRef(0);
   useEffect(() => {
@@ -224,6 +225,28 @@ export default function Board({
     }
   }
 
+  async function copyInvite() {
+    setCopying(true);
+    try {
+      const invite = request("/api/board?share=invite", { cache: "no-store" }).then(async res => {
+        if (!res.ok) throw new Error("Invite unavailable.");
+        return (await res.json() as { url: string }).url;
+      });
+      if (typeof ClipboardItem === "function" && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          "text/plain": invite.then(url => new Blob([url], { type: "text/plain" })),
+        })]);
+      } else {
+        await navigator.clipboard.writeText(await invite);
+      }
+      setNotice("Team invite link copied.");
+    } catch {
+      setNotice("Couldn’t copy the invite link. Try again.");
+    } finally {
+      setCopying(false);
+    }
+  }
+
   async function download() {
     try {
       const response = await request("/api/board", { cache: "no-store" });
@@ -264,11 +287,10 @@ export default function Board({
   const childrenOf = (id: string) => ideas.filter(e => e.parent === id);
   const matches = (e: Entry) => (e.title + " " + e.body).toLowerCase().includes(search.trim().toLowerCase());
   const visible = (e: Entry) => matches(e) || childrenOf(e.id).some(matches);
-  const outcomes = new Map(entries.filter(e => e.active && (e.kind === "resolution" || e.kind === "completion")).map(e => [e.parent, e]));
-  const solutionFor = (id: string) => childrenOf(id).find(idea => outcomes.get(idea.id)?.kind === "resolution");
+  const resolutions = new Map(entries.filter(e => e.kind === "resolution" && e.active).map(e => [e.parent, e]));
   const shown = problems.filter(visible);
-  const activeProblems = shown.filter(p => !solutionFor(p.id)).sort((a, b) => severities.indexOf(a.severity ?? "medium") - severities.indexOf(b.severity ?? "medium"));
-  const solvedProblems = shown.filter(p => solutionFor(p.id));
+  const activeProblems = shown.filter(p => !resolutions.has(p.id)).sort((a, b) => severities.indexOf(a.severity ?? "medium") - severities.indexOf(b.severity ?? "medium"));
+  const solvedProblems = shown.filter(p => resolutions.has(p.id));
   const current = shown.find(p => p.id === selected) ?? activeProblems[0] ?? solvedProblems[0];
   const todoByIdea = new Map(todos.map(todo => [todo.ideaId, todo]));
   const lookup = new Map(entries.map(entry => [entry.id, entry]));
@@ -286,8 +308,7 @@ export default function Board({
     setJump(idea.id);
   }
 
-  const solution = current ? solutionFor(current.id) : undefined;
-  const resolution = solution ? outcomes.get(solution.id) : undefined;
+  const resolution = current ? resolutions.get(current.id) : undefined;
 
   function expand(id: string) {
     setExpanded(ids => ids.includes(id) ? ids : [...ids, id]);
@@ -309,11 +330,11 @@ export default function Board({
 
   function logEntry(e: Entry) {
     const mine = ownCommentIds.includes(e.id);
-    const outcomeLabel = e.kind === "resolution" ? (e.active ? "Resolution" : "Previous resolution") : e.kind === "completion" ? "Completed" : undefined;
+    const historyLabel = e.kind === "completion" ? "Completion note" : undefined;
     return <div className="comment" key={e.id}>
       <div className={mine ? "editable-entry" : undefined}>
         {e.starred && <span className="comment-star" role="img" aria-label="Starred this idea" title="Starred this idea">★</span>}
-        {outcomeLabel && <span className={e.active ? "outcome-badge" : "history-label"}>{e.active && "✓ "}{outcomeLabel}</span>}
+        {historyLabel && <span className="history-label">{historyLabel}</span>}
         <strong>{e.author}</strong>{" "}<time dateTime={e.created}>{new Date(e.created).toLocaleDateString(undefined, {month:"short",day:"numeric"})}</time>
         <p className="body">{e.body}</p>
         {mine && <EditButton entry={e} disabled={!ready} onClick={() => edit(e)} />}
@@ -331,24 +352,18 @@ export default function Board({
 
   function ideaCards(parent: Entry) {
     const isProblem = parent.kind === "problem";
-    const solved = isProblem && Boolean(solutionFor(parent.id));
     const childIdeas = childrenOf(parent.id);
     const shownIdeas = !search || matches(parent) ? childIdeas : childIdeas.filter(matches);
     return <>
       <div className="detail-head"><h4>{isProblem ? "Ideas to test" : "Ideas"}</h4><button className="quiet" disabled={!ready} onClick={() => open({ kind: "idea", parent: parent.id, context: parent.title })}>＋ Add idea</button></div>
       {shownIdeas.map(i => {
         const items = entries.filter(e => e.parent === i.id);
-        const comments = items.filter(e => ["comment", "resolution", "completion"].includes(e.kind));
+        const comments = items.filter(e => ["comment", "completion"].includes(e.kind));
         const tests = items.filter(e => e.kind === "test");
         const votes = items.filter(e => e.starred);
         const hasVoted = Boolean(name) && votes.some(c => displayNameKey(c.author) === displayNameKey(name));
         const isOpen = expanded.includes(i.id);
-        const outcome = outcomes.get(i.id);
         const todo = todoByIdea.get(i.id);
-        const checkLabel = isProblem ? "Selected solution" : "Completed idea";
-        const outcomeAction = isProblem ? "Select as solution" : "Mark complete";
-        const canChooseOutcome = isProblem ? !solved : !outcome;
-        const chooseOutcome = () => open({kind: isProblem ? "resolution" : "completion", parent: i.id, context: i.title});
         const logTest = () => {
           expand(i.id);
           open({kind: "test", parent: i.id, context: i.title});
@@ -359,12 +374,6 @@ export default function Board({
               <span className="chevron" aria-hidden="true">{isOpen ? "−" : "+"}</span><strong>{i.title}</strong><small>{comments.length} {comments.length === 1 ? "comment" : "comments"}</small>
             </button>
             <div className="idea-tools">
-            {(todo || isOpen) && <button type="button" className={`todo-marker${todo?.done ? " todo-done" : ""}${todo ? "" : " idea-action-available"}`} title={todo ? todo.done ? "Checked off on the to-do list" : "On the to-do list" : "Add to to-do list"} aria-label={`${todo ? todo.done ? "Checked off" : "On the to-do list" : "Add to to-do list"}: ${i.title}`} disabled={!todo && (!ready || Boolean(pendingTodo))} onClick={() => {
-              if (todo) { setSearch(""); setTab("todo"); }
-              else openAssignment(i);
-            }}><ChecklistIcon /></button>}
-            {outcome ? <span className="idea-check" role="img" aria-label={checkLabel} title={checkLabel}><CheckIcon /></span>
-              : isOpen && canChooseOutcome && <button type="button" className="idea-check idea-action-available" aria-label={`${outcomeAction}: ${i.title}`} title={outcomeAction} disabled={!ready} onClick={chooseOutcome}><CheckIcon /></button>}
             {isProblem && (isOpen || tests.length > 0) && <button type="button" className="test-count" aria-label={`Log a test for ${i.title}. ${tests.length} ${tests.length === 1 ? "test run" : "test runs"}`} title="Log a test" disabled={!ready} onClick={logTest}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v7L4.5 19a1 1 0 0 0 1 2h13a1 1 0 0 0 1-2L14 10V3M8 15h8"/></svg>{tests.length > 0 && tests.length}
             </button>}
@@ -383,10 +392,13 @@ export default function Board({
               {!tests.length && <p className="meta">No test runs logged yet.</p>}
               {tests.map(logEntry)}
             </section>}
-            {(!todo || canChooseOutcome) && <div className="outcome-actions">
-              {!todo && <button className="quiet small" disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(i)}><ChecklistIcon /> Add to to-do list</button>}
-              {canChooseOutcome && <button className="quiet small solution-action" disabled={!ready} onClick={chooseOutcome}><CheckIcon /> {outcomeAction}</button>}
-            </div>}
+            <div className="task-actions">
+              {todo?.done ? <span className="task-complete"><CheckIcon /> Task complete</span> :
+                <button className="quiet small task-action" disabled={!ready || Boolean(pendingTodo)} onClick={() => {
+                  if (todo) void saveTodo(i.id, { action: "set-todo-done", done: true });
+                  else openAssignment(i);
+                }}>{todo ? <CheckIcon /> : <ChecklistIcon />} {todo ? "Complete task" : "Add task"}</button>}
+            </div>
           </div>
         </article>;
       })}
@@ -403,6 +415,11 @@ export default function Board({
     <header className="top"><div className="wrap bar">
       <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Protostars"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
       <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => open({kind: "comment", identity: true})}>Set display name</button>}
+      <button className="quiet header-share" aria-label="Copy team invite link" title="Copy team invite link" onClick={copyInvite} disabled={!ready || copying}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+          <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
+        </svg>
+      </button>
       <button className="quiet" onClick={download} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
     </div></header>
     <main className="wrap">
@@ -439,12 +456,16 @@ export default function Board({
               <div className="problem-meta"><span className="eyebrow">PROBLEM</span><ProblemStatus status={resolution ? "resolved" : current.severity ?? "medium"} full /></div><h3>{current.title}</h3><p className="body">{current.body}</p>
               <EditButton entry={current} disabled={!ready} onClick={() => edit(current)} />
             </div>
-            <EntrySource entry={current} />
-            {resolution && solution && <div className="resolution-panel">
-              <div className="discussion-head"><h4>✓ Resolution</h4><button className="quiet small" disabled={!ready || saving || !name} onClick={() => void reopen(current)}>Reopen problem</button></div>
-              <button type="button" className="quiet small" onClick={() => expand(solution.id)}>{solution.title}</button>
+            <div className="problem-actions">
+              <EntrySource entry={current} />
+              {!resolution && <button className="quiet small close-problem" disabled={!ready || saving} onClick={() => open({
+                kind: "resolution", parent: current.id, context: current.title,
+              })}>Close problem</button>}
+            </div>
+            {resolution && <section className="resolution-panel" aria-label="Resolution">
+              <div className="discussion-head"><h4>Resolution</h4><button className="quiet small" disabled={!ready || saving || !name} onClick={() => void reopen(current)}>Reopen problem</button></div>
               <p className="body">{resolution.body}</p><p className="meta">Resolved by {resolution.author}</p>
-            </div>}
+            </section>}
             {ideaCards(current)}
           </section>}
         </div> : tab === "inspiration" ? <div className="inspiration">
@@ -480,14 +501,14 @@ export default function Board({
         const assignee = String(new FormData(event.currentTarget).get("assignee") ?? "") || null;
         void saveTodo(assignment.idea.id, { action: assignment.todo ? "set-todo-assignee" : "add-todo", assignee });
       }}>
-        <div className="dialog-head"><h2 id="assignment-title">{assignment.todo ? "Edit assignee" : "Add to to-do list"}</h2></div>
+        <div className="dialog-head"><h2 id="assignment-title">{assignment.todo ? "Edit assignee" : "Add task"}</h2></div>
         <p className="meta">{assignment.idea.title}</p>
         <label>Who should do this?<select name="assignee" defaultValue={assignment.todo?.assignee ?? ""}>
           <option value="">Unassigned</option>
           {[...new Set([...knownNames, ...(assignment.todo?.assignee ? [assignment.todo.assignee] : [])])].sort((a, b) => a.localeCompare(b)).map(person => <option key={person} value={person}>{person}</option>)}
         </select></label>
         {assignmentError && <p className="notice" role="alert">{assignmentError}</p>}
-        <div className="dialog-actions"><button type="button" className="quiet" disabled={Boolean(pendingTodo)} onClick={() => setAssignment(undefined)}>Cancel</button><button className="primary" disabled={Boolean(pendingTodo)}>{assignment.todo ? "Save assignee" : "Add to list"}</button></div>
+        <div className="dialog-actions"><button type="button" className="quiet" disabled={Boolean(pendingTodo)} onClick={() => setAssignment(undefined)}>Cancel</button><button className="primary" disabled={Boolean(pendingTodo)}>{assignment.todo ? "Save assignee" : "Add task"}</button></div>
       </form>}
     </dialog>
     <dialog ref={dialog} aria-labelledby="entry-dialog-title" onCancel={e => {e.preventDefault(); if (!saving) setDraft(undefined);}}>

@@ -18,18 +18,16 @@
 .star-button span{font-size:19px;line-height:1}
 .star-button:hover:not(:disabled),.star-button[aria-pressed="true"],.comment-star{color:#ffcb69}
 .star-button:hover:not(:disabled){border-color:#ffcb69}
-.star-button[aria-pressed="true"]{opacity:1;background:#3b2a20}
+.star-button[aria-pressed="true"]{opacity:1;border-color:#a28044}
 .comment-star{margin-right:.4rem}
 .problem-divider{border:0;border-top:1px solid var(--line);margin:14px 0}
 .problem-list .empty{font-size:14px;margin:6px 2px}
-.test-count,.idea-check{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:none;border:1px solid var(--line);border-radius:7px;min-width:39px;min-height:38px;padding:2px 5px;background:transparent;font-size:13px;font-weight:700}
-.test-count{color:#8fcaff;background:#1c2d3b}
+.test-count{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:none;border:1px solid var(--line);border-radius:7px;min-width:39px;min-height:38px;padding:2px 5px;background:transparent;font-size:13px;font-weight:700}
+.test-count{color:#8fcaff}
 .test-count:hover{border-color:#8fcaff}
-.idea-check,.outcome-badge{color:#9fdb9f}
-.idea-check{min-width:29px;background:#25382c;font-size:18px}
-.outcome-badge,.history-label{margin-right:.45rem;font-size:13px;font-weight:750}
+.history-label{margin-right:.45rem;font-size:13px;font-weight:750}
 .history-label{color:var(--muted)}
-.outcome-actions{margin-top:12px;display:flex;justify-content:flex-end}
+.task-actions{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);display:flex;justify-content:flex-end}
 .resolution-panel{margin-top:14px;padding:14px;border:1px solid #456b4e;background:#233329;border-radius:9px}
 .resolution-panel h4{margin:0;color:#9fdb9f}
 .resolution-panel .body{margin-top:8px}
@@ -52,9 +50,6 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .pages-invite{display:grid;gap:10px;width:min(100%,550px)}
 .pages-invite button{justify-self:start}
 .pages-invite p{margin:0}
-.outcome-actions{gap:8px;flex-wrap:wrap}
-.todo-marker{display:grid;place-items:center;min-width:30px;min-height:36px;padding:3px;border:1px solid var(--line);border-radius:7px;color:#d9c4ff;background:#302643}
-.todo-marker.todo-done{color:#a6e2af;background:#263b2d}
 .todo-list h3{margin:4px 0 9px}
 .todo-row{display:flex;align-items:start;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 .todo-row input{width:18px;height:18px;accent-color:var(--orange);flex:none;margin:4px 0 0}
@@ -63,11 +58,7 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @media(max-width:480px){.tabs{flex-wrap:wrap}}
 .idea-tools{display:flex;align-items:center;gap:4px;flex:none;padding-right:8px}
 .idea-tools .star-button{margin-right:0}
-.idea-tools .test-count,.idea-tools .idea-check,.idea-tools .todo-marker{min-width:36px;min-height:38px}
-.idea-tools .idea-action-available{background:transparent}
-.idea-tools .idea-action-available:hover{border-color:currentColor}
-.outcome-actions{border-top:1px solid var(--line);padding-top:12px;margin-top:16px}
-.solution-action svg{color:#9fdb9f}
+.idea-tools .test-count{min-width:36px;min-height:38px}
 @media(max-width:420px){.idea-header:has(.idea-title[aria-expanded="true"]){flex-wrap:wrap}.idea-header .idea-title[aria-expanded="true"]{flex-basis:100%}.idea-header .idea-title[aria-expanded="true"]+.idea-tools{margin-left:auto;padding-bottom:8px}}
 .todo-assignee{margin-left:auto;align-self:center;font-size:14px;min-height:38px;display:flex;align-items:center;color:var(--muted)}
 .todo-assignee .edit-pencil{opacity:1;pointer-events:auto}
@@ -87,3 +78,11 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .quiet.danger:hover:not(:disabled){color:#fff0ee;background:#542d29;border-color:#ffaaa3}
 .dialog-actions .delete-entry{margin-right:auto}
 .dialog-actions:has(.delete-entry){flex-wrap:wrap}
+
+.problem-status,.quiet.header-share,.quiet.close-problem,.quiet.task-action,.resolution-panel .quiet{background:transparent}
+.problem-status.status-full{border:1px solid currentColor}
+.header-share{color:var(--accent)}
+.problem-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.quiet.close-problem{color:var(--accent)}
+.quiet.task-action{color:#d9c4ff}
+.task-complete{display:inline-flex;align-items:center;gap:6px;color:#a6e2af;font-size:.875rem}
