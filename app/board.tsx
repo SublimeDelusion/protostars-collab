@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { severities, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
+import { severities, withoutEntryBranches, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
 import { displayNameKey } from "../lib/board-cookies";
 
@@ -20,7 +20,7 @@ const boardSections = {
   },
 } as const;
 
-type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; identity?: boolean; starred?: boolean };
+type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean };
 const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
 const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", vote: "Star this idea", resolution: "Select as solution", completion: "Mark idea complete" };
 const actionNotes: Partial<Record<Kind, string>> = { test: "What did you test, and what happened?", resolution: "Resolution", completion: "What did we do?" };
@@ -93,19 +93,23 @@ export default function Board({
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [notice, setNotice] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const boardRevision = useRef(0);
   useEffect(() => {
     let active = true;
+    let requestNumber = 0;
+    let latestResult = 0;
     async function refresh() {
       const revision = boardRevision.current;
+      const number = ++requestNumber;
       try {
         const res = await request("/api/board", { cache: "no-store" });
         if (!res.ok) throw new Error();
         const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[]; teamInfo?: TeamInfo };
-        if (active && revision === boardRevision.current) { setTeam(data.teamInfo); setEntries(e => update(e, data.entries)); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
-      } catch { if (active && revision === boardRevision.current) { setReady(false); setNotice("The shared board is unavailable. Reconnecting…"); } }
+        if (active && revision === boardRevision.current && number > latestResult) { latestResult = number; setTeam(data.teamInfo); setEntries(data.entries); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
+      } catch { if (active && revision === boardRevision.current && number > latestResult) { latestResult = number; setReady(false); setNotice("The shared board is unavailable. Reconnecting…"); } }
     }
     void refresh();
     const timer = setInterval(refresh, 12000);
@@ -196,6 +200,30 @@ export default function Board({
     }
     finally { setSaving(false); }
   }
+  async function deleteEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft?.edit || saving || confirmation !== "delete") return;
+    const { id, kind } = draft.edit;
+    setSaving(true);
+    setError("");
+    try {
+      const res = await request("/api/board", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete-entry", id, confirmation }),
+      });
+      if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not delete the entry.");
+      boardRevision.current++;
+      setEntries(items => withoutEntryBranches(items, [id]));
+      setDraft(undefined);
+      setNotice(`Deleted ${labels[kind]}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete the entry.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function download() {
     try {
       const response = await request("/api/board", { cache: "no-store" });
@@ -462,9 +490,19 @@ export default function Board({
         <div className="dialog-actions"><button type="button" className="quiet" disabled={Boolean(pendingTodo)} onClick={() => setAssignment(undefined)}>Cancel</button><button className="primary" disabled={Boolean(pendingTodo)}>{assignment.todo ? "Save assignee" : "Add to list"}</button></div>
       </form>}
     </dialog>
-    <dialog ref={dialog} onCancel={e => {e.preventDefault(); if (!saving) setDraft(undefined);}}>
-      {draft && <form key={draft.edit?.id ?? draft.kind + (draft.parent ?? "")} onSubmit={submit}>
-        <div className="dialog-head"><h2>{draft.identity ? "Set display name" : draft.starred ? "Star this idea" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>
+    <dialog ref={dialog} aria-labelledby="entry-dialog-title" onCancel={e => {e.preventDefault(); if (!saving) setDraft(undefined);}}>
+      {draft?.deleting && draft.edit ? <form onSubmit={deleteEntry}>
+        <h2 id="entry-dialog-title">Delete {labels[draft.kind]}?</h2>
+        {draft.edit.title && <p className="body">{draft.edit.title}</p>}
+        <p className="body">{draft.kind === "comment" ? "This removes the comment from the shared board." : "This removes the entry and its attached discussion, tests, and to-dos from the shared board."}</p>
+        <label><span>Type <code>delete</code> to confirm</span><input autoFocus value={confirmation} onChange={e => setConfirmation(e.target.value)} autoComplete="off" spellCheck={false} /></label>
+        {error && <p className="notice" role="alert">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="quiet" disabled={saving} onClick={() => setDraft(undefined)}>Cancel</button>
+          <button className="quiet danger" disabled={saving || confirmation !== "delete"}>{saving ? "Deleting…" : "Delete " + labels[draft.kind]}</button>
+        </div>
+      </form> : draft && <form key={draft.edit?.id ?? draft.kind + (draft.parent ?? "")} onSubmit={submit}>
+        <div className="dialog-head"><h2 id="entry-dialog-title">{draft.identity ? "Set display name" : draft.starred ? "Star this idea" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>
         {draft.context && <p className="meta">{draft.context}</p>}
         {!draft.edit && (name ? <p className="meta">Posting as {name}</p> : <>
           <label>What should we call you?<input name="author" maxLength={50} required autoComplete="nickname" placeholder="First name or nickname" value={nameDraft} onChange={e => setNameDraft(e.target.value)} /></label>
@@ -478,7 +516,11 @@ export default function Board({
           <label>{draft.starred ? "Why are you starring this idea?" : actionNotes[draft.kind] ?? (draft.kind === "comment" ? "Comment" : "Description")}<textarea name="body" rows={5} required maxLength={3000} defaultValue={draft.edit?.body} /></label>
         </>}
         {error && <p className="notice" role="alert">{error}</p>}
-        <div className="dialog-actions"><button type="button" className="quiet" onClick={() => setDraft(undefined)} disabled={saving}>Cancel</button><button className="primary" disabled={saving || (!name && exactName && !draft.edit)}>{saving ? "Saving…" : draft.identity ? "Set name" : draft.edit ? "Save changes" : draft.starred ? "Post comment and star" : actionSaves[draft.kind] ?? (draft.kind === "comment" ? "Post comment" : "Save " + draft.kind)}</button></div>
+        <div className="dialog-actions">{draft.edit && <button type="button" className="quiet danger delete-entry" disabled={saving} onClick={() => {
+          setConfirmation("");
+          setError("");
+          setDraft({ ...draft, deleting: true });
+        }}>Delete</button>}<button type="button" className="quiet" onClick={() => setDraft(undefined)} disabled={saving}>Cancel</button><button className="primary" disabled={saving || (!name && exactName && !draft.edit)}>{saving ? "Saving…" : draft.identity ? "Set name" : draft.edit ? "Save changes" : draft.starred ? "Post comment and star" : actionSaves[draft.kind] ?? (draft.kind === "comment" ? "Post comment" : "Save " + draft.kind)}</button></div>
       </form>}
     </dialog>
   </>;

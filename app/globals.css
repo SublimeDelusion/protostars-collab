@@ -82,3 +82,8 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .section-intro p{color:var(--muted);margin:0}
 .entry-source{color:var(--accent);font-size:.875rem;font-style:italic;margin:0;overflow-wrap:anywhere}
 .todo-list>.discussion:first-child{margin-top:0;border-top:0;padding-top:0}
+
+.quiet.danger{color:#ffaaa3;border-color:#75433f}
+.quiet.danger:hover:not(:disabled){color:#fff0ee;background:#542d29;border-color:#ffaaa3}
+.dialog-actions .delete-entry{margin-right:auto}
+.dialog-actions:has(.delete-entry){flex-wrap:wrap}
