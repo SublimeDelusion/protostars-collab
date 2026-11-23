@@ -25,7 +25,7 @@ const boardSections = {
   activity: {
     title: "Recent activity",
     search: "Find activity",
-    description: "See what teammates have added, discussed, and starred.",
+    description: "Follow new ideas, discussions, and changes across the Workshop.",
   },
   enhancement: {
     title: "App enhancements",
@@ -48,7 +48,7 @@ type TouchDrag = {
   active: boolean;
   frame?: number;
 };
-const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", enhancement: "enhancement request", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
+const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", enhancement: "enhancement request", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion", "priority-change": "priority change", reopened: "reopened problem" };
 const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", resolution: "Close problem" };
 const actionNotes: Partial<Record<Kind, string>> = { test: "What did you test, and what happened?", resolution: "Resolution description" };
 const actionSaves: Partial<Record<Kind, string>> = { test: "Log test", vote: "Add star", resolution: "Mark as solved" };
@@ -64,6 +64,9 @@ const activityVerbs: Partial<Record<Kind, string>> = {
   enhancement: "requested an enhancement",
   comment: "commented on",
   vote: "starred",
+  test: "logged a test for",
+  completion: "logged a completion for",
+  reopened: "reopened a problem",
 };
 
 const activityDate = new Intl.DateTimeFormat("en-US", {
@@ -72,16 +75,29 @@ const activityDate = new Intl.DateTimeFormat("en-US", {
 
 type ActivityEvent = { entry: Entry; action: string };
 
+function activityAction(entry: Entry, target: Entry) {
+  if (entry.kind === "resolution") {
+    if (target.kind === "problem") return "closed a problem as Solved";
+    const outcome = enhancementOutcomes.find(value => value === entry.title);
+    return outcome ? "closed a request as " + enhancementOutcomeLabels[outcome] : "closed a request";
+  }
+  if (entry.kind === "priority-change") {
+    const priority = severities.find(value => value === entry.title);
+    return priority ? "changed priority to " + severityLabels[priority] : "changed priority";
+  }
+  if (entry.kind === "comment" && entry.starred) return "starred and commented on";
+  return activityVerbs[entry.kind];
+}
+
 function groupActivity(entries: Entry[], lookup: Map<string, Entry>, search: string) {
   const groups = new Map<string, { target: Entry; events: ActivityEvent[] }>();
   const query = search.trim().toLowerCase();
   for (const entry of entries) {
-    const verb = activityVerbs[entry.kind];
-    if (entry.source || !verb) continue;
-    const target = entry.kind === "comment" || entry.kind === "vote"
-      ? lookup.get(entry.parent ?? "") : entry;
+    if (entry.source) continue;
+    const target = entry.parent && entry.kind !== "idea" ? lookup.get(entry.parent) : entry;
     if (!target) continue;
-    const action = entry.starred && entry.kind === "comment" ? "starred and commented on" : verb;
+    const action = activityAction(entry, target);
+    if (!action) continue;
     const event = { entry, action };
     const group = groups.get(target.id);
     if (group) group.events.push(event);
@@ -89,12 +105,21 @@ function groupActivity(entries: Entry[], lookup: Map<string, Entry>, search: str
   }
   return [...groups.values()].flatMap(({ target, events }) => {
     events.sort((a, b) => b.entry.created.localeCompare(a.entry.created));
+    const container = target.kind === "idea" ? lookup.get(target.parent ?? "") : target;
+    const source = container?.kind === "problem" ? "Virtual Pit" : container?.kind === "enhancement" ? "App enhancements" : "Idea Lab";
+    const type = target.kind === "enhancement" ? "Request" : target.kind === "problem" ? "Problem" : target.kind === "inspiration" ? "Inspiration" : "Idea";
     const matches = ({ entry, action }: ActivityEvent) =>
-      `${entry.author} ${action} ${target.title} ${target.body} ${entry.body}`.toLowerCase().includes(query);
+      `${entry.author} ${action} ${source} ${type} ${target.title} ${target.body} ${entry.body}`.toLowerCase().includes(query);
     if (query && !events.some(matches)) return [];
-    const comments = events.filter(event => event.entry.kind === "comment");
-    const matchingComments = query ? comments.filter(matches) : comments;
-    return [{ target, latest: events[0], comments: (matchingComments.length ? matchingComments : comments).slice(0, 3) }];
+    const previews = (accept: (event: ActivityEvent) => boolean) => {
+      const candidates = events.filter(accept);
+      const matching = query ? candidates.filter(matches) : candidates;
+      return (matching.length ? matching : candidates).slice(0, 3);
+    };
+    const replies = previews(event => event.entry.kind === "comment");
+    const actions = previews(event => event.entry.id !== target.id && event.entry.kind !== "comment" && event.entry.kind !== "vote");
+    const included = new Set([...replies, ...actions]);
+    return [{ target, source, type, latest: events[0], details: events.filter(event => included.has(event)) }];
   }).sort((a, b) => b.latest.entry.created.localeCompare(a.latest.entry.created)).slice(0, 50);
 }
 
@@ -435,9 +460,9 @@ export default function Board({
         body: JSON.stringify({ action: "edit-problem", id: problem.id, field, value }),
       });
       if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not save the problem.");
-      const { entry } = await res.json() as { entry: Entry };
+      const { entry, activity } = await res.json() as { entry: Entry; activity?: Entry };
       boardRevision.current++;
-      setEntries(items => update(items, [entry]));
+      setEntries(items => update(items, activity ? [entry, activity] : [entry]));
       setProblemEdit(undefined);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not save the problem.");
@@ -578,7 +603,7 @@ export default function Board({
   }
 
   function showActivity(entry: Entry, target: Entry) {
-    const focusId = entry.kind === "comment" ? "comment-" + entry.id : undefined;
+    const focusId = ["comment", "test", "completion"].includes(entry.kind) ? "comment-" + entry.id : undefined;
     if (target.kind === "idea") {
       const parent = lookup.get(target.parent ?? "");
       if (parent) showIdea(target, parent, focusId);
@@ -606,9 +631,9 @@ export default function Board({
     try {
       const res = await request("/api/board", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "reopen", id: problem.id }) });
       if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not reopen the problem.");
-      const { entry } = await res.json() as { entry: Entry };
+      const { entry, activity } = await res.json() as { entry: Entry; activity?: Entry };
       boardRevision.current++;
-      setEntries(e => update(e, [entry]));
+      setEntries(e => update(e, activity ? [entry, activity] : [entry]));
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not reopen the problem.");
     } finally { setSaving(false); }
@@ -882,19 +907,21 @@ export default function Board({
           })}
         </div> : tab === "activity" ? (
           recentActivity.length ? <ol className="activity-feed">
-            {recentActivity.map(({ target, latest, comments }) => <li className="detail activity-item" key={target.id}>
+            {recentActivity.map(({ target, source, type, latest, details }) => <li className="detail activity-item" key={target.id}>
               <div className="activity-meta">
-                <span><strong>{latest.entry.author}</strong> {latest.action}</span>
+                <span><strong>{latest.entry.author || "A teammate"}</strong> {latest.action}</span>
                 <time dateTime={latest.entry.created} title="Mountain time">{activityDate.format(new Date(latest.entry.created))} MT</time>
               </div>
               <div className="activity-content">
+                <p className="activity-source">{source} · {type}</p>
                 <h3><button type="button" className="todo-link" onClick={() => showActivity(target, target)}>{target.title}</button></h3>
                 {target.body && <p className="body activity-preview">{target.body}</p>}
-                {comments.length > 0 && <ul className="activity-comments" aria-label="Recent comments">
-                  {comments.map(({ entry }) => <li key={entry.id}>
+                {details.length > 0 && <ul className="activity-comments" aria-label="Recent actions and comments">
+                  {details.map(({ entry, action }) => <li key={entry.id}>
                     <button type="button" className="activity-comment-link" onClick={() => showActivity(entry, target)}>
-                      <span className="activity-preview">{entry.body}</span>
-                      <span className="activity-byline">{entry.author}</span>
+                      {entry.kind !== "comment" && <span className="activity-action">{action.charAt(0).toUpperCase() + action.slice(1)}</span>}
+                      {entry.body && <span className="activity-preview">{entry.body}</span>}
+                      <span className="activity-byline">{entry.author || "A teammate"}</span>
                     </button>
                   </li>)}
                 </ul>}

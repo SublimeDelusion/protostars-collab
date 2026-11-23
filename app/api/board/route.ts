@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { contributions, people, todos } from "../../../db/schema";
 import { PAGES_ORIGIN } from "../../../lib/pages-origin";
@@ -54,7 +54,7 @@ export async function GET(request: Request) {
   const name = currentName(previousName);
   const key = displayNameKey(name);
   const ownCommentIds = key ? visible.filter(row => row.kind === "comment" && displayNameKey(row.author) === key).map(row => row.id) : [];
-  const names = new Map(rows.filter(row => row.kind !== deletionKind && row.author !== "Competition debrief").map(row => {
+  const names = new Map(rows.filter(row => row.kind !== deletionKind && row.author && row.author !== "Competition debrief").map(row => {
     const author = currentName(row.author);
     return [displayNameKey(author), author];
   }));
@@ -158,6 +158,27 @@ async function findEntry(db: ReturnType<typeof getDb>, number: string, id: strin
   const entry = rows[0] ?? teamSeed(number).find(item => item.id === id);
   if (entry?.parent && !await findEntry(db, number, entry.parent)) return undefined;
   return entry;
+}
+
+function recordProblemActivity(db: ReturnType<typeof getDb>, team: string, parent: string, kind: "priority-change" | "reopened", author: string, title: string, when: SQL) {
+  // Insert the event only if the pending write changes the stored state.
+  return db.insert(contributions).select(sql`select
+    ${team}, ${crypto.randomUUID()}, ${kind}, ${parent}, ${title}, '', ${author}, ${new Date().toISOString()}, null, null, null
+    where ${when}`).returning();
+}
+
+async function saveProblem(db: ReturnType<typeof getDb>, team: string, problem: Entry, changes: Partial<Pick<Entry, "title" | "body" | "severity">>, author: string) {
+  const save = db.insert(contributions).values({ ...problem, ...changes, team })
+    .onConflictDoUpdate({ target: contributions.id, setWhere: eq(contributions.team, team), set: changes }).returning();
+  if (!changes.severity) {
+    const [saved] = await save;
+    return { entry: publicEntry(saved, problem.source) };
+  }
+  const initialSeverity = teamSeed(team).find(entry => entry.id === problem.id)?.severity ?? "medium";
+  const record = recordProblemActivity(db, team, problem.id, "priority-change", author, changes.severity,
+    sql`coalesce((select ${contributions.severity} from ${contributions} where ${contributions.team} = ${team} and ${contributions.id} = ${problem.id}), ${initialSeverity}) <> ${changes.severity}`);
+  const [[activity], [saved]] = await db.batch([record, save]);
+  return { entry: publicEntry(saved, problem.source), ...(activity ? { activity: publicEntry(activity) } : {}) };
 }
 
 export async function POST(request: Request) {
@@ -322,11 +343,17 @@ export async function PATCH(request: Request) {
     if (!id || (await findEntry(db, number, id))?.kind !== "problem") {
       return response({ error: "This problem could not be found." }, 404);
     }
-    const [entry] = await db.update(contributions).set({ outcomeFor: null, parent: id }).where(and(
+    const activeResolution = and(
       eq(contributions.team, number), eq(contributions.outcomeFor, id), eq(contributions.kind, "resolution")
-    )).returning();
+    );
+    const author = await currentDisplayName(db, number, displayName(request));
+    const record = recordProblemActivity(db, number, id, "reopened", author, "",
+      sql`exists (select 1 from ${contributions} where ${activeResolution})`);
+    const [[activity], [entry]] = await db.batch([
+      record, db.update(contributions).set({ outcomeFor: null, parent: id }).where(activeResolution).returning(),
+    ]);
     if (!entry) return response({ error: "This problem is already active." }, 409);
-    return response({ entry: publicEntry(entry) });
+    return response({ entry: publicEntry(entry), activity: publicEntry(activity) });
   }
   if (input.action === "edit-problem") {
     const db = getDb();
@@ -340,9 +367,8 @@ export async function PATCH(request: Request) {
       return response({ error: "Enter a valid problem title, description, or severity." }, 400);
     }
     const changes = field === "title" ? { title: value } : field === "body" ? { body: value } : { severity: value as Severity };
-    const [saved] = await db.insert(contributions).values({ ...publicEntry(problem), ...changes, team: number })
-      .onConflictDoUpdate({ target: contributions.id, setWhere: eq(contributions.team, number), set: changes }).returning();
-    return response({ entry: publicEntry(saved, teamSeed(number).find(entry => entry.id === id)?.source) });
+    const author = changes.severity ? await currentDisplayName(db, number, displayName(request)) : "";
+    return response(await saveProblem(db, number, publicEntry(problem, teamSeed(number).find(entry => entry.id === id)?.source), changes, author));
   }
   if (!id || !body || body.length > 3000) {
     return response({ error: "Enter text between 1 and 3,000 characters." }, 400);
@@ -367,15 +393,19 @@ export async function PATCH(request: Request) {
   if (input.severity !== undefined && (current.kind !== "problem" || !validSeverity(input.severity))) {
     return response({ error: "Choose High, Medium or Low severity." }, 400);
   }
-  const severity = current.kind === "problem" ? (validSeverity(input.severity) ? input.severity : current.severity ?? "medium") : undefined;
-  if (current.title === title && current.body === body && (current.kind !== "problem" || severity === (current.severity ?? "medium"))) {
+  const severity = current.kind === "problem" && validSeverity(input.severity) ? input.severity : undefined;
+  if (current.kind === "problem" && severity) {
+    const author = await currentDisplayName(db, number, displayName(request));
+    return response(await saveProblem(db, number, publicEntry(current, seed?.source), { title, body, severity }, author));
+  }
+  if (current.title === title && current.body === body) {
     return response({ entry: publicEntry(current, seed?.source) });
   }
-  const entry = { ...publicEntry(current), title, body, ...(severity ? { severity } : {}) };
+  const entry = { ...publicEntry(current), title, body };
   await db.insert(contributions).values({ ...entry, team: number }).onConflictDoUpdate({
     target: contributions.id,
     setWhere: eq(contributions.team, number),
-    set: { title, body, ...(severity ? { severity } : {}) },
+    set: { title, body },
   });
-  return response({ entry: publicEntry({ ...current, title, body, ...(severity ? { severity } : {}) }, seed?.source) });
+  return response({ entry: publicEntry({ ...current, title, body }, seed?.source) });
 }
