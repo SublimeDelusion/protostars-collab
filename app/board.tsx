@@ -82,10 +82,10 @@ export default function Board({
   const [todos, setTodos] = useState<Todo[]>([]);
   const [swimlanes, setSwimlanes] = useState(false);
   const [draggedTask, setDraggedTask] = useState<string>();
-  const [dropColumn, setDropColumn] = useState<string>();
+  const [dropTarget, setDropTarget] = useState<{ column: string; before?: string }>();
   const [problemEdit, setProblemEdit] = useState<{ id: string; field: "title" | "body" }>();
   const [pendingTodo, setPendingTodo] = useState<string>();
-  const [assignment, setAssignment] = useState<{ idea: Entry; todo?: Todo }>();
+  const [assignment, setAssignment] = useState<Entry>();
   const [assignmentError, setAssignmentError] = useState("");
   const assignmentDialog = useRef<HTMLDialogElement>(null);
   const [jump, setJump] = useState<string>();
@@ -151,9 +151,9 @@ export default function Board({
     if (team) document.title = "FTC Workshop | " + team.name;
   }, [team]);
 
-  function openAssignment(idea: Entry, todo?: Todo) {
+  function openAssignment(idea: Entry) {
     setAssignmentError("");
-    setAssignment({ idea, todo });
+    setAssignment(idea);
   }
 
   function open(next: Draft) { setError(""); setNameDraft(""); setDraft(next); }
@@ -273,7 +273,7 @@ export default function Board({
     } catch { setNotice("Couldn't download the shared board. Please try again."); }
   }
 
-  async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-status"; status: TaskStatus } | { action: "move-todo"; status: TaskStatus; before?: string }) {
+  async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-status"; status: TaskStatus } | { action: "move-todo"; status: TaskStatus; before?: string; assignee?: string | null }) {
     if (pendingTodo) return;
     setPendingTodo(id);
     setNotice("");
@@ -286,11 +286,11 @@ export default function Board({
       const result = await response.json() as { todo: Todo } | { tasks: Todo[] };
       boardRevision.current++;
       setTodos(items => [...new Map([...items, ...("tasks" in result ? result.tasks : [result.todo])].map(item => [item.ideaId, item])).values()]);
-      if ("assignee" in change) setAssignment(undefined);
+      if (change.action === "add-todo") setAssignment(undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save the to-do.";
-      if ("status" in change) setNotice(message);
-      else setAssignmentError(message);
+      if (change.action === "add-todo") setAssignmentError(message);
+      else setNotice(message);
     } finally { setPendingTodo(undefined); }
   }
 
@@ -314,7 +314,7 @@ export default function Board({
     return idea && parent && (idea.kind === "idea") && (matches(idea) || matches(parent)) ? [{ todo, idea, parent }] : [];
   });
 
-  const lanes = swimlanes ? [...new Set([...knownNames, ...todos.map(todo => todo.assignee || "")])]
+  const lanes = swimlanes ? [...new Set([...knownNames, ...todos.map(todo => todo.assignee || ""), ""])]
     .sort((a, b) => a ? b ? a.localeCompare(b) : -1 : 1) : [""];
   if (!lanes.length) lanes.push("");
 
@@ -369,14 +369,23 @@ export default function Board({
 
   function clearTaskDrag() {
     setDraggedTask(undefined);
-    setDropColumn(undefined);
+    setDropTarget(undefined);
   }
 
   function dropTask(status: TaskStatus, lane: string, before?: string) {
     const task = draggedTask && todoByIdea.get(draggedTask);
     clearTaskDrag();
-    if (!task || task.ideaId === before || (swimlanes && (task.assignee || "") !== lane)) return;
-    void saveTodo(task.ideaId, { action: "move-todo", status, before });
+    if (!task || task.ideaId === before) return;
+    void saveTodo(task.ideaId, { action: "move-todo", status, before, ...(swimlanes ? { assignee: lane || null } : {}) });
+  }
+
+  function insertionPoint(column: HTMLElement, y: number) {
+    const cards = Array.from(column.querySelectorAll<HTMLElement>("[data-task-id]"));
+    return cards.find(card => {
+      if (card.dataset.taskId === draggedTask) return false;
+      const bounds = card.getBoundingClientRect();
+      return y < bounds.top + bounds.height / 2;
+    })?.dataset.taskId;
   }
 
   function showIdea(idea: Entry, parent: Entry) {
@@ -529,7 +538,7 @@ export default function Board({
 
         <div className="tools">
           <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
-          {tab === "todo" && <button className="quiet" aria-pressed={swimlanes} onClick={() => setSwimlanes(active => !active)}>By assignee</button>}
+          {tab === "todo" && <button className="quiet assignee-toggle" aria-pressed={swimlanes} onClick={() => setSwimlanes(active => !active)}>By assignee</button>}
           {tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
         </div>
       </section>
@@ -609,39 +618,37 @@ export default function Board({
           <div className="kanban">
           {taskStatuses.map(status => {
             const items = todoRows.filter(row => taskStatus(row.todo) === status && (!swimlanes || (row.todo.assignee || "") === lane)).sort((a, b) => compareTaskRank(a.todo, b.todo));
-            const canDrop = Boolean(draggedTask && (!swimlanes || (todoByIdea.get(draggedTask)?.assignee || "") === lane));
             const columnId = `tasks-${laneIndex}-${status}`;
-            return <section className={`kanban-column${canDrop && dropColumn === columnId ? " drop-target" : ""}`} key={status} aria-labelledby={columnId}
+            const activeDrop = draggedTask && dropTarget?.column === columnId ? dropTarget : undefined;
+            return <section className={`kanban-column${activeDrop ? " drop-target" : ""}${activeDrop && !activeDrop.before ? " insert-at-end" : ""}`}
+              key={status} aria-labelledby={columnId}
               onDragOver={event => {
-                if (!canDrop) return;
+                if (!draggedTask) return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
-                setDropColumn(columnId);
+                const before = insertionPoint(event.currentTarget, event.clientY);
+                setDropTarget(target => target?.column === columnId && target.before === before ? target : { column: columnId, before });
               }}
               onDragLeave={event => {
                 if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
-                setDropColumn(column => column === columnId ? undefined : column);
+                setDropTarget(target => target?.column === columnId ? undefined : target);
               }}
-              onDrop={event => { if (canDrop) { event.preventDefault(); dropTask(status, lane); } }}>
-
+              onDrop={event => {
+                if (!draggedTask) return;
+                event.preventDefault();
+                dropTask(status, lane, insertionPoint(event.currentTarget, event.clientY));
+              }}>
               <h3 id={columnId}>{taskStatusLabels[status]} <small className="meta">{items.length}</small></h3>
               {!items.length && <p className="meta">{search.trim() ? "No matching tasks." : "No tasks here yet."}</p>}
-              {items.map(({ idea, parent, todo }, index) => <article className={`kanban-card${draggedTask === idea.id ? " is-dragging" : ""}`} key={idea.id}
+              {items.map(({ idea, parent, todo }, index) => <article className={`kanban-card${draggedTask === idea.id ? " is-dragging" : ""}${activeDrop?.before === idea.id ? " insert-before" : ""}`}
+                data-task-id={idea.id} key={idea.id}
                 draggable={ready && !pendingTodo}
                 onDragStart={event => {
                   event.dataTransfer.setData("text/plain", idea.title);
                   event.dataTransfer.effectAllowed = "move";
                   setDraggedTask(idea.id);
                 }}
-                onDragEnd={clearTaskDrag}
-                onDrop={event => {
-                  if (!canDrop) return;
-                  event.preventDefault();
-                  event.stopPropagation();
-                  const bounds = event.currentTarget.getBoundingClientRect();
-                  const before = event.clientY < bounds.top + bounds.height / 2 ? idea.id : items[index + 1]?.idea.id;
-                  dropTask(status, lane, before);
-                }}>
+                onDragEnd={clearTaskDrag}>
                 <div className="task-rank">
                     <button type="button" className="quiet small" aria-label={`Move ${idea.title} up`}
                       disabled={!ready || Boolean(pendingTodo) || index === 0}
@@ -654,10 +661,12 @@ export default function Board({
                 <button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button>
                 <p className="meta">{parent.title}</p>
                 <div className="kanban-actions">
-                  <div className="todo-assignee editable-entry">
-                    <span>{todo.assignee || "Unassigned"}</span>
-                    <EditButton entry={idea} label={`Edit assignee for ${idea.title}`} disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(idea, todo)} />
-                  </div>
+                  <select aria-label={`Assignee for ${idea.title}`} value={todo.assignee ?? ""} disabled={!ready || Boolean(pendingTodo)}
+                    onChange={event => void saveTodo(idea.id, { action: "set-todo-assignee", assignee: event.currentTarget.value || null })}>
+                    <option value="">Unassigned</option>
+                    {[...new Set([...knownNames, ...(todo.assignee ? [todo.assignee] : [])])].sort((a, b) => a.localeCompare(b))
+                      .map(person => <option key={person} value={person}>{person}</option>)}
+                  </select>
                   <select aria-label={`Status for ${idea.title}`} value={status} disabled={!ready || Boolean(pendingTodo)}
                     onChange={event => void saveTodo(idea.id, { action: "set-todo-status", status: event.currentTarget.value as TaskStatus })}>
                     {taskStatuses.map(option => <option key={option} value={option}>{taskStatusLabels[option]}</option>)}
@@ -686,16 +695,16 @@ export default function Board({
       {assignment && <form onSubmit={event => {
         event.preventDefault();
         const assignee = String(new FormData(event.currentTarget).get("assignee") ?? "") || null;
-        void saveTodo(assignment.idea.id, { action: assignment.todo ? "set-todo-assignee" : "add-todo", assignee });
+        void saveTodo(assignment.id, { action: "add-todo", assignee });
       }}>
-        <div className="dialog-head"><h2 id="assignment-title">{assignment.todo ? "Edit assignee" : "Add task"}</h2></div>
-        <p className="meta">{assignment.idea.title}</p>
-        <label>Who should do this?<select name="assignee" defaultValue={assignment.todo?.assignee ?? ""}>
+        <div className="dialog-head"><h2 id="assignment-title">Add task</h2></div>
+        <p className="meta">{assignment.title}</p>
+        <label>Who should do this?<select name="assignee">
           <option value="">Unassigned</option>
-          {[...new Set([...knownNames, ...(assignment.todo?.assignee ? [assignment.todo.assignee] : [])])].sort((a, b) => a.localeCompare(b)).map(person => <option key={person} value={person}>{person}</option>)}
+          {knownNames.map(person => <option key={person} value={person}>{person}</option>)}
         </select></label>
         {assignmentError && <p className="notice" role="alert">{assignmentError}</p>}
-        <div className="dialog-actions"><button type="button" className="quiet" disabled={Boolean(pendingTodo)} onClick={() => setAssignment(undefined)}>Cancel</button><button className="primary" disabled={Boolean(pendingTodo)}>{assignment.todo ? "Save assignee" : "Add task"}</button></div>
+        <div className="dialog-actions"><button type="button" className="quiet" disabled={Boolean(pendingTodo)} onClick={() => setAssignment(undefined)}>Cancel</button><button className="primary" disabled={Boolean(pendingTodo)}>Add task</button></div>
       </form>}
     </dialog>
     <dialog ref={dialog} aria-labelledby="entry-dialog-title" onCancel={e => {e.preventDefault(); if (!saving) setDraft(undefined);}}>

@@ -56,8 +56,6 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .idea-tools .star-button{margin-right:0}
 .idea-tools .test-count{min-width:36px;min-height:38px}
 @media(max-width:420px){.idea-header:has(.idea-title[aria-expanded="true"]){flex-wrap:wrap}.idea-header .idea-title[aria-expanded="true"]{flex-basis:100%}.idea-header .idea-title[aria-expanded="true"]+.idea-tools{margin-left:auto;padding-bottom:8px}}
-.todo-assignee{margin-left:auto;align-self:center;font-size:14px;min-height:38px;display:flex;align-items:center;color:var(--muted)}
-.todo-assignee .edit-pencil{opacity:1;pointer-events:auto}
 .pages-invite form,.pages-invite label{display:grid;gap:8px}
 .pages-invite form{gap:14px}
 .hero h1{color:#fff}
@@ -87,12 +85,11 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .quiet.task-icon,.task-complete.task-icon{display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:38px;padding:0;background:transparent}
 .quiet.task-icon{color:#d9c4ff}
 .kanban{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
-.kanban-column{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.kanban-column{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
 .kanban-column h3{margin:0 0 12px}
-.kanban-card{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-wrap:anywhere}
+.kanban-card{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-wrap:anywhere}
 .kanban-card+.kanban-card{margin-top:10px}
 .kanban-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:10px}
-.kanban-card .todo-assignee{margin-left:0}
 .kanban-actions select{font:inherit;font-size:.875rem;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px}
 @media(max-width:760px){.kanban{grid-template-columns:1fr}}
 .toolbar .tabs{width:auto}
@@ -104,9 +101,9 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .kanban-card[draggable=true]{cursor:grab}
 .kanban-card.is-dragging{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);background:#392a21}
 .kanban-column.drop-target{border-color:var(--accent);background:#30241e;box-shadow:inset 0 0 0 1px var(--accent)}
-.task-rank{display:flex;flex-direction:column;gap:4px;align-items:stretch}
-.task-rank button{justify-content:center;min-width:30px}
-.kanban-card-content{min-width:0}
+.task-rank{grid-column:2;grid-row:1;display:flex;flex-direction:column;align-self:start;gap:2px}
+.task-rank button{justify-content:center;width:26px;height:20px;padding:0;line-height:1}
+.kanban-card-content{grid-column:1;grid-row:1;min-width:0}
 .problem-card-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .severity-control{display:inline-flex;align-items:center;gap:5px;position:relative;padding:4px 7px;border:1px solid #817b72;border-radius:7px}
 .severity-control:hover,.severity-control:focus-within{border-color:var(--severity-color)}
@@ -128,3 +125,9 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .inline-problem-form textarea{field-sizing:content;min-height:3em;resize:vertical}
 .inline-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 @media(hover:none){.severity-caret{opacity:1}}
+
+.assignee-toggle[aria-pressed=true]{color:#ffe1cf;border-color:var(--accent);background:#392a21}
+.kanban-card.insert-before::before,.kanban-column.insert-at-end::after{content:"";position:absolute;left:12px;right:12px;height:3px;background:var(--accent);border-radius:2px;pointer-events:none}
+.kanban-card.insert-before::before{top:-6px}
+.kanban-column.insert-at-end::after{bottom:6px}
+.kanban-actions select{max-width:100%}
