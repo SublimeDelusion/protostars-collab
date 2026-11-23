@@ -86,3 +86,9 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .quiet.close-problem{color:var(--accent)}
 .quiet.task-action{color:#d9c4ff}
 .task-complete{display:inline-flex;align-items:center;gap:6px;color:#a6e2af;font-size:.875rem}
+
+.enhancements{display:grid;gap:14px;width:min(100%,840px)}
+.enhancement-heading{display:flex;align-items:flex-start;gap:8px}
+.enhancement-heading .editable-entry{flex:1;min-width:0}
+.enhancement-heading h3{margin:0 0 6px;font-size:clamp(1.25rem,3vw,1.55rem);line-height:1.2}
+.enhancement-heading .star-button{margin:0;min-height:44px;flex:none}

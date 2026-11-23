@@ -8,21 +8,29 @@ import { displayNameKey } from "../lib/board-cookies";
 const boardSections = {
   inspiration: {
     title: "Idea Lab",
+    search: "Find inspiration",
     description: "Share something that inspired you and build on each other’s ideas for the robot, the pit, or the team.",
   },
   problem: {
     title: "Virtual Pit",
+    search: "Find a problem or idea",
     description: "Flag problems, troubleshoot them together, and refine solutions as you test.",
   },
   todo: {
     title: "To-do list",
+    search: "Find a to-do",
     description: "Assign and check off work queued from the Idea Lab or Virtual Pit.",
+  },
+  enhancement: {
+    title: "App enhancements",
+    search: "Find a request",
+    description: "Suggest improvements to FTC Workshop, discuss them, and star the requests you’d use.",
   },
 } as const;
 
 type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean };
-const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
-const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", vote: "Star this idea", resolution: "Close problem" };
+const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", enhancement: "enhancement request", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
+const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", resolution: "Close problem" };
 const actionNotes: Partial<Record<Kind, string>> = { test: "What did you test, and what happened?", resolution: "Resolution description" };
 const actionSaves: Partial<Record<Kind, string>> = { test: "Log test", vote: "Add star", resolution: "Mark as solved" };
 const untitled = (kind: Kind) => ["comment", "test", "vote", "resolution"].includes(kind);
@@ -192,7 +200,7 @@ export default function Board({
       setKnownNames(names => names.some(candidate => displayNameKey(candidate) === displayNameKey(entry.author)) ? names : [...names, entry.author]);
       if (entry.kind === "comment") setOwnCommentIds(ids => [...ids, entry.id]);
       if (entry.kind === "problem") { setTab("problem"); setSelected(entry.id); setSearch(""); }
-      if (entry.kind === "inspiration") { setTab("inspiration"); setSearch(""); }
+      if (entry.kind === "inspiration" || entry.kind === "enhancement") { setTab(entry.kind); setSearch(""); }
       if (entry.kind === "idea") setExpanded(ids => [...ids, entry.id]);
       setDraft(undefined);
     } catch (err) {
@@ -286,6 +294,7 @@ export default function Board({
   const inspirations = entries.filter(e => e.kind === "inspiration");
   const childrenOf = (id: string) => ideas.filter(e => e.parent === id);
   const matches = (e: Entry) => (e.title + " " + e.body).toLowerCase().includes(search.trim().toLowerCase());
+  const enhancementRequests = entries.filter(e => e.kind === "enhancement" && matches(e));
   const visible = (e: Entry) => matches(e) || childrenOf(e.id).some(matches);
   const resolutions = new Map(entries.filter(e => e.kind === "resolution" && e.active).map(e => [e.parent, e]));
   const shown = problems.filter(visible);
@@ -350,6 +359,22 @@ export default function Board({
     </section>;
   }
 
+  function starButton(entry: Entry, votes: Entry[], withComment = false) {
+    const hasVoted = Boolean(name) && votes.some(vote => displayNameKey(vote.author) === displayNameKey(name));
+    const subject = entry.kind === "enhancement" ? "request" : "idea";
+    return <button type="button" className="star-button"
+      aria-label={`${hasVoted ? "You starred" : "Star"} ${entry.title}. ${votes.length} ${votes.length === 1 ? "star" : "stars"}`}
+      aria-pressed={hasVoted}
+      title={hasVoted ? `You already starred this ${subject}` : `Star this ${subject}${withComment ? " and explain why" : ""}`}
+      disabled={!ready || hasVoted || saving}
+      onClick={() => {
+        const vote: Draft = { kind: withComment ? "comment" : "vote", parent: entry.id, context: entry.title, starred: withComment };
+        if (withComment) expand(entry.id);
+        if (withComment || !name) open(vote);
+        else void saveContribution(vote);
+      }}><span aria-hidden="true">{hasVoted ? "★" : "☆"}</span>{votes.length}</button>;
+  }
+
   function ideaCards(parent: Entry) {
     const isProblem = parent.kind === "problem";
     const childIdeas = childrenOf(parent.id);
@@ -361,7 +386,6 @@ export default function Board({
         const comments = items.filter(e => ["comment", "completion"].includes(e.kind));
         const tests = items.filter(e => e.kind === "test");
         const votes = items.filter(e => e.starred);
-        const hasVoted = Boolean(name) && votes.some(c => displayNameKey(c.author) === displayNameKey(name));
         const isOpen = expanded.includes(i.id);
         const todo = todoByIdea.get(i.id);
         const logTest = () => {
@@ -377,11 +401,7 @@ export default function Board({
             {isProblem && (isOpen || tests.length > 0) && <button type="button" className="test-count" aria-label={`Log a test for ${i.title}. ${tests.length} ${tests.length === 1 ? "test run" : "test runs"}`} title="Log a test" disabled={!ready} onClick={logTest}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v7L4.5 19a1 1 0 0 0 1 2h13a1 1 0 0 0 1-2L14 10V3M8 15h8"/></svg>{tests.length > 0 && tests.length}
             </button>}
-            <button type="button" className="star-button" aria-label={`${hasVoted ? "You starred" : "Star"} ${i.title}. ${votes.length} ${votes.length === 1 ? "star" : "stars"}`} aria-pressed={hasVoted} title={hasVoted ? "You already starred this idea" : isProblem ? "Star this idea and explain why" : "Star this idea"} disabled={!ready || hasVoted || saving} onClick={() => {
-              const vote: Draft = {kind: isProblem ? "comment" : "vote", parent: i.id, context: i.title, starred: isProblem};
-              if (isProblem) expand(i.id);
-              if (isProblem || !name) open(vote); else void saveContribution(vote);
-            }}><span aria-hidden="true">{hasVoted ? "★" : "☆"}</span>{votes.length}</button>
+            {starButton(i, votes, isProblem)}
             </div>
           </div>
           <div id={"idea-" + i.id} hidden={!isOpen} className="idea-body">
@@ -430,11 +450,14 @@ export default function Board({
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Board controls">
         <div className="tabs">
-          <button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>{boardSections.inspiration.title}</button>
-          <button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>{boardSections.problem.title}</button>
-          <button className={tab === "todo" ? "active" : ""} aria-pressed={tab === "todo"} onClick={() => {setTab("todo"); setSearch("");}}>{boardSections.todo.title}</button>
+          {(Object.keys(boardSections) as (keyof typeof boardSections)[]).map(key => <button key={key}
+            className={tab === key ? "active" : ""} aria-pressed={tab === key}
+            onClick={() => { setTab(key); setSearch(""); }}>{boardSections[key].title}</button>)}
         </div>
-        <div className="tools"><input type="search" placeholder={tab === "problem" ? "Find a problem or idea" : tab === "todo" ? "Find a to-do" : "Find inspiration"} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />{tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ {tab === "problem" ? "Add problem" : "Add inspiration"}</button>}</div>
+        <div className="tools">
+          <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
+          {tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
+        </div>
       </section>
       <section aria-labelledby="board-section-title">
         <header className="section-intro">
@@ -475,6 +498,23 @@ export default function Board({
             {ideaCards(i)}
           </article>)}</div>
           {!inspirations.some(visible) && <p className="empty">No matching inspiration.</p>}
+        </div> : tab === "enhancement" ? <div className="enhancements">
+          {enhancementRequests.map(entry => {
+            const activity = entries.filter(item => item.parent === entry.id);
+            return <article className="detail enhancement-card" key={entry.id} aria-labelledby={`request-${entry.id}`}>
+              <div className="enhancement-heading">
+                <div className="editable-entry">
+                  <h3 id={`request-${entry.id}`}>{entry.title}</h3>
+                  <p className="body">{entry.body}</p>
+                  <EntrySource entry={entry} />
+                  <EditButton entry={entry} disabled={!ready} onClick={() => edit(entry)} />
+                </div>
+                {starButton(entry, activity.filter(item => item.starred))}
+              </div>
+              {discussion(entry, activity.filter(item => item.kind === "comment"))}
+            </article>;
+          })}
+          {!enhancementRequests.length && <p className="empty">{search.trim() ? "No matching requests." : "No enhancement requests yet."}</p>}
         </div> : <div className="detail todo-list">
           {[false, true].map(done => {
             const items = todoRows.filter(row => row.todo.done === done);
@@ -523,7 +563,7 @@ export default function Board({
           <button className="quiet danger" disabled={saving || confirmation !== "delete"}>{saving ? "Deleting…" : "Delete " + labels[draft.kind]}</button>
         </div>
       </form> : draft && <form key={draft.edit?.id ?? draft.kind + (draft.parent ?? "")} onSubmit={submit}>
-        <div className="dialog-head"><h2 id="entry-dialog-title">{draft.identity ? "Set display name" : draft.starred ? "Star this idea" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>
+        <div className="dialog-head"><h2 id="entry-dialog-title">{draft.identity ? "Set display name" : draft.starred ? "Star this idea" : draft.kind === "vote" ? "Add a star" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>
         {draft.context && <p className="meta">{draft.context}</p>}
         {!draft.edit && (name ? <p className="meta">Posting as {name}</p> : <>
           <label>What should we call you?<input name="author" maxLength={50} required autoComplete="nickname" placeholder="First name or nickname" value={nameDraft} onChange={e => setNameDraft(e.target.value)} /></label>
