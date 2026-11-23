@@ -155,6 +155,7 @@ export default function Board({
   const [selected, setSelected] = useState(initialEntries[0]?.id ?? "");
   const [problemDetailOpen, setProblemDetailOpen] = useState(false);
   const [expanded, setExpanded] = useState<string[]>(initialEntries[1] ? [initialEntries[1].id] : []);
+  const [expandedEnhancement, setExpandedEnhancement] = useState<string>();
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState<Draft>();
   const [ownCommentIds, setOwnCommentIds] = useState<string[]>([]);
@@ -304,6 +305,7 @@ export default function Board({
       }
       if (entry.kind === "inspiration" || entry.kind === "enhancement") { setTab(entry.kind); setSearch(""); }
       if (entry.kind === "idea") setExpanded(ids => [...ids, entry.id]);
+      if (entry.kind === "enhancement") setExpandedEnhancement(entry.id);
       if (next.closeEnhancement) setJump("entry-" + entry.parent);
       setDraft(undefined);
     } catch (err) {
@@ -583,6 +585,7 @@ export default function Board({
       return;
     }
     if (target.kind === "problem") openProblem(target.id);
+    if (target.kind === "enhancement") setExpandedEnhancement(target.id);
     if (target.kind === "problem" || target.kind === "inspiration" || target.kind === "enhancement") {
       setSearch("");
       setTab(target.kind);
@@ -731,13 +734,29 @@ export default function Board({
       </button>
       <div className="workshop-menu" id="workshop-menu">
       <nav className="tabs mobile-nav" aria-label="Workshop sections">{navigationButtons(true)}</nav>
-      <div className="tools header-tools"><button className="quiet" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>{name ? "Change display name" : "Set display name"}</button>
-      <button className="quiet header-share" aria-label="Copy team invite link" title="Copy team invite link" onClick={() => { setMenuOpen(false); void copyInvite(); }} disabled={!ready || copying}>
+      <div className="tools header-tools">
+      <button className="quiet header-share" aria-label="Invite a teammate" title="Copy team invite link" onClick={() => { setMenuOpen(false); void copyInvite(); }} disabled={!ready || copying}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
           <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
         </svg>
+        Invite
       </button>
-      <button className="quiet" onClick={() => { setMenuOpen(false); void download(); }} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
+      <button className="quiet" onClick={() => { setMenuOpen(false); void download(); }} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button>
+      {name ? <details className="profile-menu" onKeyDown={event => {
+        if (event.key !== "Escape" || !event.currentTarget.open) return;
+        event.stopPropagation();
+        event.currentTarget.open = false;
+        event.currentTarget.querySelector("summary")?.focus();
+      }}>
+        <summary className="quiet"><span>{name}</span><span aria-hidden="true">⌄</span></summary>
+        <div className="profile-actions"><button type="button" className="quiet" disabled={!ready} onClick={event => {
+          const profile = event.currentTarget.closest("details");
+          if (profile) profile.open = false;
+          setMenuOpen(false);
+          open({kind: "comment", identity: true});
+        }}>Edit display name</button></div>
+      </details> : <button className="quiet profile-start" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>Set display name</button>}
+      </div>
       </div>
     </div></header>
     <main className={`wrap${showProblemDetail ? " mobile-problem-open" : ""}`}>
@@ -828,23 +847,36 @@ export default function Board({
             const heading = closed ? "Closed enhancements" : "Active enhancements";
             return <section className="enhancement-group" key={heading}>
               <h3>{heading}</h3>
-              {group.map(({ entry, votes, comments, resolution, outcome }) => <article className="detail enhancement-card" key={entry.id} id={`entry-${entry.id}`} tabIndex={-1} aria-labelledby={`request-${entry.id}`}>
-                <div className="enhancement-heading">
-                  <div className="editable-entry">
-                    <h4 id={`request-${entry.id}`}>{entry.title}</h4>
+              {group.map(({ entry, votes, comments, resolution, outcome }) => {
+                const isOpen = expandedEnhancement === entry.id;
+                const detailsId = `request-details-${entry.id}`;
+                return <article className="detail enhancement-card" key={entry.id} id={`entry-${entry.id}`} tabIndex={-1} aria-labelledby={`request-${entry.id}`}>
+                  <div className="enhancement-heading">
+                    <h4><button type="button" id={`request-${entry.id}`} className="enhancement-toggle" aria-expanded={isOpen} aria-controls={detailsId} onClick={() => setExpandedEnhancement(isOpen ? undefined : entry.id)}>
+                      <span className="chevron" aria-hidden="true">{isOpen ? "−" : "+"}</span>
+                      <strong>{entry.title}</strong>
+                      {outcome && <span className="enhancement-status">{enhancementOutcomeLabels[outcome]}</span>}
+                      {!isOpen && <span className="meta" role="img" aria-label={`${votes.length} ${votes.length === 1 ? "star" : "stars"}`}>☆ {votes.length}</span>}
+                    </button></h4>
+                    {isOpen && <div className="enhancement-tools" role="group" aria-label="Request actions">
+                      {starButton(entry, votes)}
+                      <EditButton entry={entry} label="Edit request" disabled={!ready || saving} onClick={() => edit(entry)} />
+                      {!outcome && <button type="button" className="quiet enhancement-close" aria-label="Close request" title="Close request" disabled={!ready || saving} onClick={() => open({ kind: "resolution", parent: entry.id, context: entry.title, closeEnhancement: true })}>
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9h16v11H4zM3 4h18v5H3zm6 9 2 2 4-4"/></svg>
+                      </button>}
+                    </div>}
+                  </div>
+                  <div className="enhancement-details" id={detailsId} hidden={!isOpen}>
                     <p className="body">{entry.body}</p>
                     <EntrySource entry={entry} />
-                    <EditButton entry={entry} disabled={!ready} onClick={() => edit(entry)} />
+                    {outcome && resolution && <div className="enhancement-resolution">
+                      {resolution.body && <p className="body">{resolution.body}</p>}
+                      <p className="meta">Closed by {resolution.author}</p>
+                    </div>}
+                    {discussion(entry, comments)}
                   </div>
-                  {starButton(entry, votes)}
-                </div>
-                {outcome && resolution ? <div className="enhancement-resolution">
-                  <strong>{enhancementOutcomeLabels[outcome]}</strong>
-                  {resolution.body && <p className="body">{resolution.body}</p>}
-                  <p className="meta">Closed by {resolution.author}</p>
-                </div> : <button type="button" className="quiet small" disabled={!ready || saving} onClick={() => open({ kind: "resolution", parent: entry.id, context: entry.title, closeEnhancement: true })}>Close request</button>}
-                {discussion(entry, comments)}
-              </article>)}
+                </article>;
+              })}
               {!group.length && <p className="empty">{search.trim() ? "No matching requests." : closed ? "No closed enhancements yet." : "No active enhancements yet."}</p>}
             </section>;
           })}

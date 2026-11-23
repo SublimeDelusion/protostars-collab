@@ -59,7 +59,7 @@ export async function GET(request: Request) {
     return [displayNameKey(author), author];
   }));
   for (const person of roster) if (!person.renamedTo) names.set(person.key, person.name);
-  if (key && key !== "competition debrief" && !names.has(key)) {
+  if (key && key !== "competition debrief" && !rosterByKey.has(key)) {
     await db.insert(people).values({ team: number, key, name }).onConflictDoNothing();
     names.set(key, name);
   }
@@ -106,7 +106,8 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
   const oldKey = displayNameKey(previous);
   const key = displayNameKey(name);
   const oldPerson = await findPerson(db, team, oldKey);
-  if (!oldPerson || oldPerson.renamedTo) return response({ error: "Set your display name on this device first." }, 422);
+  const registeredName = oldPerson?.name ?? await canonicalName(db, team, previous);
+  if (!registeredName || oldPerson?.renamedTo) return response({ error: "Set your display name on this device first." }, 422);
   if (key !== oldKey && (await findPerson(db, team, key) || await canonicalName(db, team, name))) {
     return response({ error: "That name is already in use. Try a nickname." }, 409);
   }
@@ -121,10 +122,10 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
   const oldAssignments = oldValues(assignments);
   const oldRow = and(eq(people.team, team), eq(people.key, oldKey), isNull(people.renamedTo));
   const rosterChanges = key === oldKey
-    ? [db.update(people).set({ name }).where(oldRow)]
+    ? [oldPerson ? db.update(people).set({ name }).where(oldRow) : db.insert(people).values({ team, key, name })]
     : [
       db.delete(people).where(oldRow),
-      db.insert(people).values({ team, key: oldKey, name: oldPerson.name, renamedTo: key }),
+      db.insert(people).values({ team, key: oldKey, name: registeredName, renamedTo: key }),
       db.insert(people).values({ team, key, name }),
       db.update(people).set({ renamedTo: key }).where(and(eq(people.team, team), eq(people.renamedTo, oldKey))),
     ];
