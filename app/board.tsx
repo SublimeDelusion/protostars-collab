@@ -70,6 +70,34 @@ const activityDate = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium", timeStyle: "short", timeZone: "America/Denver",
 });
 
+type ActivityEvent = { entry: Entry; action: string };
+
+function groupActivity(entries: Entry[], lookup: Map<string, Entry>, search: string) {
+  const groups = new Map<string, { target: Entry; events: ActivityEvent[] }>();
+  const query = search.trim().toLowerCase();
+  for (const entry of entries) {
+    const verb = activityVerbs[entry.kind];
+    if (entry.source || !verb) continue;
+    const target = entry.kind === "comment" || entry.kind === "vote"
+      ? lookup.get(entry.parent ?? "") : entry;
+    if (!target) continue;
+    const action = entry.starred && entry.kind === "comment" ? "starred and commented on" : verb;
+    const event = { entry, action };
+    const group = groups.get(target.id);
+    if (group) group.events.push(event);
+    else groups.set(target.id, { target, events: [event] });
+  }
+  return [...groups.values()].flatMap(({ target, events }) => {
+    events.sort((a, b) => b.entry.created.localeCompare(a.entry.created));
+    const matches = ({ entry, action }: ActivityEvent) =>
+      `${entry.author} ${action} ${target.title} ${target.body} ${entry.body}`.toLowerCase().includes(query);
+    if (query && !events.some(matches)) return [];
+    const comments = events.filter(event => event.entry.kind === "comment");
+    const matchingComments = query ? comments.filter(matches) : comments;
+    return [{ target, latest: events[0], comments: (matchingComments.length ? matchingComments : comments).slice(0, 3) }];
+  }).sort((a, b) => b.latest.entry.created.localeCompare(a.latest.entry.created)).slice(0, 50);
+}
+
 function ProblemStatus({ status, full = false }: { status: Severity | "resolved"; full?: boolean }) {
   const label = severityLabels[status];
   return <span className={`problem-status status-${status}${full ? " status-full" : ""}`} aria-label={full ? undefined : label} role={full ? undefined : "img"} title={status === "resolved" ? label : label + " severity"}>
@@ -524,16 +552,7 @@ export default function Board({
     if (touchDrag.current?.pointerId === event.pointerId) clearTaskDrag();
   }
 
-  const recentActivity = tab === "activity" ? entries.flatMap(entry => {
-    if (entry.source || !activityVerbs[entry.kind]) return [];
-    const target = entry.kind === "comment" || entry.kind === "vote"
-      ? lookup.get(entry.parent ?? "") : entry;
-    if (!target) return [];
-    const action = entry.starred && entry.kind === "comment" ? "starred and commented on" : activityVerbs[entry.kind];
-    const query = search.trim().toLowerCase();
-    if (!`${entry.author} ${action} ${target.title} ${entry.body}`.toLowerCase().includes(query)) return [];
-    return [{ entry, target, action }];
-  }).sort((a, b) => b.entry.created.localeCompare(a.entry.created)).slice(0, 50) : [];
+  const recentActivity = tab === "activity" ? groupActivity(entries, lookup, search) : [];
 
   function showIdea(idea: Entry, parent: Entry, focusId = "idea-toggle-" + idea.id) {
     setSearch("");
@@ -808,13 +827,19 @@ export default function Board({
           {!enhancementRequests.length && <p className="empty">{search.trim() ? "No matching requests." : "No enhancement requests yet."}</p>}
         </div> : tab === "activity" ? (
           recentActivity.length ? <ol className="activity-feed">
-            {recentActivity.map(({ entry, target, action }) => <li className="detail activity-item" key={entry.id}>
+            {recentActivity.map(({ target, latest, comments }) => <li className="detail activity-item" key={target.id}>
               <div className="activity-meta">
-                <span><strong>{entry.author}</strong> {action}</span>
-                <time dateTime={entry.created} title="Mountain time">{activityDate.format(new Date(entry.created))} MT</time>
+                <span><strong>{latest.entry.author}</strong> {latest.action}</span>
+                <time dateTime={latest.entry.created} title="Mountain time">{activityDate.format(new Date(latest.entry.created))} MT</time>
               </div>
-              <button type="button" className="todo-link" onClick={() => showActivity(entry, target)}>{target.title}</button>
-              {entry.body && <p className="body activity-preview">{entry.body}</p>}
+              <button type="button" className="todo-link" onClick={() => showActivity(target, target)}>{target.title}</button>
+              {target.body && <p className="body activity-preview">{target.body}</p>}
+              {comments.length > 0 && <ul className="activity-comments" aria-label="Recent comments">
+                {comments.map(({ entry }) => <li key={entry.id}>
+                  <button type="button" className="todo-link" aria-label={`${entry.author}’s comment on ${target.title}`} onClick={() => showActivity(entry, target)}>{entry.author}</button>
+                  <p className="body activity-preview">{entry.body}</p>
+                </li>)}
+              </ul>}
             </li>)}
           </ol> : <p className="empty">{search.trim() ? "No matching activity." : ready ? "No recent activity yet." : "Loading recent activity…"}</p>
         ) : <div className="kanban-lanes">{lanes.map((lane, laneIndex) => <div className="kanban-lane" key={lane}>
