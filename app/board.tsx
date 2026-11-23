@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import { compareTaskRank, enhancementOutcomes, enhancementOutcomeLabels, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type AdoptionRow, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
 import { publishedAt } from "../lib/release";
@@ -154,6 +154,38 @@ function EditButton({ entry, disabled, onClick, label }: { entry: Entry; disable
   return <button type="button" className="edit-pencil" aria-label={label ?? (entry.kind === "comment" ? "Edit your comment" : `Edit ${entry.kind}: ${entry.title}`)} title={label ?? (entry.kind === "comment" ? "Edit your comment" : "Edit title and description")} disabled={disabled} onClick={onClick}>
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>
   </button>;
+}
+
+function HeaderDropdown({ className, label, triggerClass = "", children }: { className: string; label: ReactNode; triggerClass?: string; children: ReactNode }) {
+  const menu = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const close = () => { if (menu.current) menu.current.open = false; };
+    const closeOutside = (event: Event) => {
+      if (event.target instanceof Node && !menu.current?.contains(event.target)) close();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("focusin", closeOutside);
+    window.addEventListener("blur", close);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("focusin", closeOutside);
+      window.removeEventListener("blur", close);
+    };
+  }, []);
+  return <details ref={menu} className={className} onKeyDown={event => {
+    if (event.key !== "Escape" || !event.currentTarget.open) return;
+    event.stopPropagation();
+    event.currentTarget.open = false;
+    event.currentTarget.querySelector("summary")?.focus();
+  }}>
+    <summary className={`quiet ${triggerClass}`}>
+      {label}
+      <svg className="menu-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+    </summary>
+    <div className="profile-actions" onClick={event => {
+      if (event.target instanceof Element && event.target.closest("button")) event.currentTarget.closest("details")?.removeAttribute("open");
+    }}>{children}</div>
+  </details>;
 }
 
 export default function Board({
@@ -373,12 +405,34 @@ export default function Board({
     }
   }
 
-  async function copyInvite(teamNumber?: string) {
+  async function openTeammateInvite() {
+    if (issuingInvite) return;
+    setTeammateInvite(true);
+    setIssuedInvite("");
+    setInviteError("");
+    setInviteCopied(false);
+    setIssuingInvite(true);
+    setMenuOpen(false);
+    inviteDialog.current?.showModal();
+    try {
+      const res = await request("/api/board?share=invite", { method: "POST" });
+      if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not create an invite link.");
+      const { url } = await res.json() as { url: string };
+      setIssuedInvite(url);
+      requestAnimationFrame(() => inviteDialog.current?.querySelector<HTMLButtonElement>(".invite-copy")?.focus());
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : "Could not create the invite. Try again.");
+    } finally {
+      setIssuingInvite(false);
+    }
+  }
+
+  async function copyInvite(teamNumber: string) {
     if (copying) return;
     setCopying(true);
-    const invite = (teamNumber ? request("/api/board", {
+    const invite = request("/api/board", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "replace-team-invite", teamNumber }),
-    }) : request("/api/board?share=invite", { method: "POST" })).then(async res => {
+    }).then(async res => {
       if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not create an invite link.");
       return (await res.json() as { url: string }).url;
     });
@@ -390,27 +444,23 @@ export default function Board({
       } else {
         await navigator.clipboard.writeText(await invite);
       }
-      if (!teamNumber) setNotice("One-time invite link copied.");
-      else {
-        setTeammateInvite(false);
-        setIssuedInvite(await invite);
-        setInviteCopied(true);
-        setInviteError("");
-        adoptionDialog.current?.close();
-        inviteDialog.current?.showModal();
-      }
+      setTeammateInvite(false);
+      setIssuedInvite(await invite);
+      setInviteCopied(true);
+      setInviteError("");
+      adoptionDialog.current?.close();
+      inviteDialog.current?.showModal();
     } catch {
       try {
         setIssuedInvite(await invite);
-        setTeammateInvite(!teamNumber);
+        setTeammateInvite(false);
         setInviteError("Select the invite link below to copy it.");
         setInviteCopied(false);
         adoptionDialog.current?.close();
         inviteDialog.current?.showModal();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not create the invite.";
-        if (teamNumber) setAdoptionError(message);
-        else setNotice(message);
+        setAdoptionError(message);
       }
     } finally {
       setCopying(false);
@@ -447,7 +497,7 @@ export default function Board({
     setInviteError("");
     try {
       const res = await request("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        action: "invite-team", teamName: fields.get("teamName"), teamNumber: fields.get("teamNumber"), message: fields.get("message"),
+        action: "invite-team", teamName: fields.get("teamName"), teamNumber: fields.get("teamNumber"),
       }) });
       if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not create the invite. Try again.");
       const { url } = await res.json() as { url: string };
@@ -829,44 +879,24 @@ export default function Board({
       <div className="workshop-menu" id="workshop-menu">
       <nav className="tabs mobile-nav" aria-label="Workshop sections">{navigationButtons(true)}</nav>
       <div className="tools header-tools">
-      <details className="invite-menu">
-      <summary className="quiet header-share">
+      <HeaderDropdown className="invite-menu" triggerClass="header-share" label={<>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
           <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
         </svg>
         Invite
-        <svg className="menu-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-      </summary>
-      <div className="profile-actions">
-        <button type="button" className="quiet" disabled={!ready || copying} onClick={event => {
-          event.currentTarget.closest("details")?.removeAttribute("open");
-          setMenuOpen(false);
-          void copyInvite();
-        }}>Copy one-time teammate link</button>
-        <button type="button" className="quiet" disabled={!ready} onClick={event => {
-          event.currentTarget.closest("details")?.removeAttribute("open");
-          openTeamInvite();
-        }}>Invite a new team</button>
-      </div>
-      </details>
-      {name ? <details className="profile-menu" onKeyDown={event => {
-        if (event.key !== "Escape" || !event.currentTarget.open) return;
-        event.stopPropagation();
-        event.currentTarget.open = false;
-        event.currentTarget.querySelector("summary")?.focus();
-      }}>
-        <summary className="quiet">
+      </>}>
+        <button type="button" disabled={!ready || issuingInvite} onClick={() => void openTeammateInvite()}>Invite teammate</button>
+        <button type="button" disabled={!ready || issuingInvite} onClick={openTeamInvite}>Invite new team</button>
+      </HeaderDropdown>
+      {name ? <HeaderDropdown className="profile-menu" label={<>
           <svg className="profile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20v-1a7 7 0 0 1 14 0v1"/></svg>
           <span className="profile-name">{name}</span>
-          <svg className="menu-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-        </summary>
-        <div className="profile-actions"><button type="button" className="quiet" disabled={!ready} onClick={event => {
-          const profile = event.currentTarget.closest("details");
-          if (profile) profile.open = false;
+        </>}>
+        <button type="button" disabled={!ready} onClick={() => {
           setMenuOpen(false);
           open({kind: "comment", identity: true});
-        }}>Edit display name</button></div>
-      </details> : <button className="quiet profile-start" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>Set display name</button>}
+        }}>Edit display name</button>
+      </HeaderDropdown> : <button className="quiet profile-start" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>Set display name</button>}
       </div>
       </div>
     </div></header>
@@ -1107,28 +1137,31 @@ export default function Board({
       </footer>
     </main>
     <dialog ref={inviteDialog} aria-labelledby="team-invite-title" onCancel={event => { if (issuingInvite) event.preventDefault(); }}>
-      <h2 id="team-invite-title">{issuedInvite ? teammateInvite ? "Teammate link ready" : "Team invite ready" : "Invite a new team"}</h2>
+      <h2 id="team-invite-title">{teammateInvite ? "One-time invite link" : issuedInvite ? "Team invite ready" : "Invite new team"}</h2>
       {issuedInvite ? <>
-        <p>{teammateInvite ? "Send this one-time link to one teammate to join your Workshop board." : "Send this link to the team you’re inviting. They’ll use it to claim their own Workshop board."}</p>
-        <label>Invite link<input readOnly value={issuedInvite} onFocus={event => event.currentTarget.select()} /></label>
+        {!teammateInvite && <p>Send this link to the team you’re inviting so they can claim their Workshop board.</p>}
+        <label>{teammateInvite ? "Link" : "Invite link"}<input readOnly value={issuedInvite} onFocus={event => event.currentTarget.select()} /></label>
         {inviteCopied && <p className="notice" role="status">Invite link copied.</p>}
         {inviteError && <p className="notice" role="alert">{inviteError}</p>}
         <div className="dialog-actions">
           <button type="button" className="quiet" onClick={() => inviteDialog.current?.close()}>OK</button>
-          <button type="button" className="primary" onClick={async () => {
+          <button type="button" className="primary invite-copy" onClick={async () => {
             setInviteError("");
             try { await navigator.clipboard.writeText(issuedInvite); setInviteCopied(true); }
             catch { setInviteError("Select the invite link above to copy it."); }
-          }}>Copy invite link</button>
+          }}>{teammateInvite ? "Copy" : "Copy invite link"}</button>
         </div>
+      </> : teammateInvite ? <>
+        {issuingInvite && <p role="status">Creating link…</p>}
+        {inviteError && <p className="notice" role="alert">{inviteError}</p>}
+        <div className="dialog-actions"><button type="button" className="quiet" disabled={issuingInvite} onClick={() => inviteDialog.current?.close()}>Close</button></div>
       </> : <form onSubmit={createTeamInvite}>
         <label>Team name<input name="teamName" required maxLength={120} /></label>
         <label>Team number<input name="teamNumber" required inputMode="numeric" pattern="[1-9][0-9]{0,11}" maxLength={12} /></label>
-        <label>Message (optional)<textarea name="message" rows={3} maxLength={1000} /></label>
         {inviteError && <p className="notice" role="alert">{inviteError}</p>}
         <div className="dialog-actions">
           <button type="button" className="quiet" disabled={issuingInvite} onClick={() => inviteDialog.current?.close()}>Cancel</button>
-          <button className="primary" disabled={issuingInvite}>{issuingInvite ? "Saving…" : "Save"}</button>
+          <button className="primary" disabled={issuingInvite}>{issuingInvite ? "Creating…" : "Create invite"}</button>
         </div>
       </form>}
     </dialog>
