@@ -33,6 +33,8 @@ const boardSections = {
     description: "Suggest improvements to FTC Workshop, discuss them, and star the requests you’d use.",
   },
 } as const;
+const mainSections = ["inspiration", "problem", "todo", "activity"] as const;
+const mobileLayout = "(max-width: 740px)";
 
 type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean };
 type TouchDrag = {
@@ -107,6 +109,8 @@ export default function Board({
   const [team, setTeam] = useState<TeamInfo>();
   const [entries, setEntries] = useState(initialEntries);
   const [tab, setTab] = useState<keyof typeof boardSections>("inspiration");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const section = boardSections[tab];
   const [todos, setTodos] = useState<Todo[]>([]);
   const [swimlanes, setSwimlanes] = useState(false);
@@ -121,6 +125,7 @@ export default function Board({
   const assignmentDialog = useRef<HTMLDialogElement>(null);
   const [jump, setJump] = useState<string>();
   const [selected, setSelected] = useState(initialEntries[0]?.id ?? "");
+  const [problemDetailOpen, setProblemDetailOpen] = useState(false);
   const [expanded, setExpanded] = useState<string[]>(initialEntries[1] ? [initialEntries[1].id] : []);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState<Draft>();
@@ -169,7 +174,11 @@ export default function Board({
     if (!jump) return;
     const target = document.getElementById(jump);
     target?.focus({ preventScroll: true });
-    target?.scrollIntoView({ block: "center" });
+    if (jump === "board-section-title" && window.matchMedia(mobileLayout).matches) {
+      window.scrollTo(0, 0);
+    } else {
+      target?.scrollIntoView({ block: jump === "back-to-problems" ? "start" : "center" });
+    }
     setJump(undefined);
   }, [jump]);
 
@@ -189,6 +198,20 @@ export default function Board({
   function openAssignment(idea: Entry) {
     setAssignmentError("");
     setAssignment(idea);
+  }
+
+  function navigate(next: keyof typeof boardSections, fromMenu = false) {
+    setTab(next);
+    setSearch("");
+    setMenuOpen(false);
+    setProblemDetailOpen(false);
+    setProblemEdit(undefined);
+    if (fromMenu) setJump("board-section-title");
+  }
+
+  function openProblem(id: string) {
+    setSelected(id);
+    setProblemDetailOpen(true);
   }
 
   function open(next: Draft) { setError(""); setNameDraft(""); setDraft(next); }
@@ -239,7 +262,11 @@ export default function Board({
       setName(entry.author);
       setKnownNames(names => names.some(candidate => displayNameKey(candidate) === displayNameKey(entry.author)) ? names : [...names, entry.author]);
       if (entry.kind === "comment") setOwnCommentIds(ids => [...ids, entry.id]);
-      if (entry.kind === "problem") { setTab("problem"); setSelected(entry.id); setSearch(""); }
+      if (entry.kind === "problem") {
+        navigate("problem");
+        openProblem(entry.id);
+        if (window.matchMedia(mobileLayout).matches) setJump("back-to-problems");
+      }
       if (entry.kind === "inspiration" || entry.kind === "enhancement") { setTab(entry.kind); setSearch(""); }
       if (entry.kind === "idea") setExpanded(ids => [...ids, entry.id]);
       setDraft(undefined);
@@ -341,6 +368,7 @@ export default function Board({
   const activeProblems = shown.filter(p => !resolutions.has(p.id)).sort((a, b) => severities.indexOf(a.severity ?? "medium") - severities.indexOf(b.severity ?? "medium"));
   const solvedProblems = shown.filter(p => resolutions.has(p.id));
   const current = shown.find(p => p.id === selected) ?? activeProblems[0] ?? solvedProblems[0];
+  const showProblemDetail = tab === "problem" && problemDetailOpen && current?.id === selected;
   const todoByIdea = new Map(todos.map(todo => [todo.ideaId, todo]));
   const lookup = new Map(entries.map(entry => [entry.id, entry]));
   const todoRows = todos.flatMap(todo => {
@@ -510,7 +538,7 @@ export default function Board({
   function showIdea(idea: Entry, parent: Entry, focusId = "idea-toggle-" + idea.id) {
     setSearch("");
     setTab(parent.kind === "problem" ? "problem" : "inspiration");
-    if (parent.kind === "problem") setSelected(parent.id);
+    if (parent.kind === "problem") openProblem(parent.id);
     expand(idea.id);
     setJump(focusId);
   }
@@ -522,7 +550,7 @@ export default function Board({
       if (parent) showIdea(target, parent, focusId);
       return;
     }
-    if (target.kind === "problem") setSelected(target.id);
+    if (target.kind === "problem") openProblem(target.id);
     if (target.kind === "problem" || target.kind === "inspiration" || target.kind === "enhancement") {
       setSearch("");
       setTab(target.kind);
@@ -642,22 +670,45 @@ export default function Board({
   }
 
   function problemLinks(items: Entry[], solved: boolean) {
-    return items.map(p => <button key={p.id} className={current?.id === p.id ? "selected" : ""} aria-pressed={current?.id === p.id} onClick={() => setSelected(p.id)}>
+    return items.map(p => <button key={p.id} id={`problem-row-${p.id}`} className={current?.id === p.id ? "selected" : ""} onClick={() => {
+      openProblem(p.id);
+      if (window.matchMedia(mobileLayout).matches) setJump("back-to-problems");
+    }}>
       <span className="problem-link-label"><ProblemStatus status={solved ? "resolved" : p.severity ?? "medium"} /><span>{p.title}</span></span><small>{childrenOf(p.id).length}</small>
+      <span className="problem-row-chevron" aria-hidden="true">›</span>
     </button>);
   }
+  function navigationButtons(fromMenu = false) {
+    return mainSections.map(key => <button type="button" key={key}
+      className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined}
+      onClick={() => navigate(key, fromMenu)}>{boardSections[key].title}</button>);
+  }
+
   return <>
-    <header className="top"><div className="wrap bar">
+    <header className="top" onKeyDown={event => {
+      if (event.key === "Escape" && menuOpen) {
+        setMenuOpen(false);
+        menuButton.current?.focus();
+      }
+    }}><div className="wrap bar" data-menu-open={menuOpen}>
       <a href={root} className="brand">{team?.logo && <img src={assetOrigin + team.logo} width="48" height="48" alt="" />}<span>{team?.name ?? "Protostars"}{team && <small>FIRST TECH CHALLENGE · TEAM {team.number}</small>}</span></a>
-      <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => open({kind: "comment", identity: true})}>Set display name</button>}
-      <button className="quiet header-share" aria-label="Copy team invite link" title="Copy team invite link" onClick={copyInvite} disabled={!ready || copying}>
+      <button type="button" ref={menuButton} className="quiet mobile-menu-toggle" aria-label="Workshop menu" aria-expanded={menuOpen} aria-controls="workshop-menu" onClick={() => setMenuOpen(open => !open)}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+          <path d={menuOpen ? "m6 6 12 12M18 6 6 18" : "M4 6h16M4 12h16M4 18h16"} />
+        </svg>
+      </button>
+      <div className="workshop-menu" id="workshop-menu">
+      <nav className="tabs mobile-nav" aria-label="Workshop sections">{navigationButtons(true)}</nav>
+      <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>Set display name</button>}
+      <button className="quiet header-share" aria-label="Copy team invite link" title="Copy team invite link" onClick={() => { setMenuOpen(false); void copyInvite(); }} disabled={!ready || copying}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
           <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
         </svg>
       </button>
-      <button className="quiet" onClick={download} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
+      <button className="quiet" onClick={() => { setMenuOpen(false); void download(); }} disabled={!ready}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button></div>
+      </div>
     </div></header>
-    <main className="wrap">
+    <main className={`wrap${showProblemDetail ? " mobile-problem-open" : ""}`}>
       <section className="hero">
         <div><h1>FTC Workshop</h1><p className="workshop-credit">by Team 17097 Protostars</p></div>
         <div className="stats" aria-label="Board shortcuts">
@@ -665,19 +716,12 @@ export default function Board({
             { tab: "problem", label: "Problems", count: problems.length },
             { tab: "inspiration", label: "Inspirations", count: inspirations.length },
             { tab: "todo", label: "Tasks", count: todos.filter(todo => lookup.has(todo.ideaId)).length },
-          ] as const).map(stat => <button type="button" key={stat.tab} onClick={() => {
-            setTab(stat.tab);
-            setSearch("");
-          }}><strong>{stat.count}</strong><span>{stat.label}</span></button>)}
+          ] as const).map(stat => <button type="button" key={stat.tab} onClick={() => navigate(stat.tab)}><strong>{stat.count}</strong><span>{stat.label}</span></button>)}
         </div>
       </section>
       {notice && <p className="notice" role="status">{notice}</p>}
-      <section className="toolbar" aria-label="Workshop navigation">
-        <div className="tabs">
-          {(["inspiration", "problem", "todo", "activity"] as const).map(key => <button key={key}
-            className={tab === key ? "active" : ""} aria-pressed={tab === key}
-            onClick={() => { setTab(key); setSearch(""); }}>{boardSections[key].title}</button>)}
-        </div>
+      <section className="toolbar" aria-label="Workshop controls">
+        <nav className="tabs desktop-nav" aria-label="Workshop sections">{navigationButtons()}</nav>
 
         <div className="tools">
           <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
@@ -687,7 +731,7 @@ export default function Board({
       </section>
       <section aria-labelledby="board-section-title">
         <header className="section-intro">
-          <h2 id="board-section-title">{section.title}</h2>
+          <h2 id="board-section-title" tabIndex={-1}>{section.title}</h2>
           <p>{section.description}</p>
         </header>
 
@@ -701,7 +745,13 @@ export default function Board({
             {problemLinks(solvedProblems, true)}
             {!solvedProblems.length && <p className="empty">No solved problems{search ? " match" : " yet"}.</p>}
           </aside>
-          {current && <section className="detail" aria-label="Selected problem" id={`entry-${current.id}`} tabIndex={-1}>
+          {current && <div className="problem-detail">
+          <button type="button" className="quiet back-to-problems" id="back-to-problems" onClick={() => {
+            setProblemDetailOpen(false);
+            setProblemEdit(undefined);
+            setJump(`problem-row-${current.id}`);
+          }}><span aria-hidden="true">←</span> Back to problems</button>
+          <section className="detail" aria-label="Selected problem" id={`entry-${current.id}`} tabIndex={-1}>
             <div className="problem-card-toolbar">
               <span className="eyebrow">PROBLEM</span>
               <label className="severity-control">
@@ -731,7 +781,7 @@ export default function Board({
               <p className="body">{resolution.body}</p><p className="meta">Resolved by {resolution.author}</p>
             </section>}
             {ideaCards(current)}
-          </section>}
+          </section></div>}
         </div> : tab === "inspiration" ? <div className="inspiration">
           <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id} id={`entry-${i.id}`} tabIndex={-1}>
             <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><EntrySource entry={i} /><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
@@ -852,9 +902,7 @@ export default function Board({
           <div>Last updated <time dateTime={publishedAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/Denver" }).format(new Date(publishedAt))}</time></div>
         </div>
         <button type="button" className="quiet small" aria-pressed={tab === "enhancement"} onClick={() => {
-          setTab("enhancement");
-          setSearch("");
-          document.querySelector(".toolbar")?.scrollIntoView({ block: "start" });
+          navigate("enhancement", true);
         }}>App enhancements</button>
       </footer>
     </main>
