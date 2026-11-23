@@ -5,6 +5,21 @@ import { severities, type Entry, type Kind, type Severity, type TeamInfo, type T
 
 import { displayNameKey } from "../lib/board-cookies";
 
+const boardSections = {
+  inspiration: {
+    title: "Idea Lab",
+    description: "Share something that inspired you and build on each other’s ideas for the robot, the pit, or the team.",
+  },
+  problem: {
+    title: "Virtual Pit",
+    description: "Flag problems, troubleshoot them together, and refine solutions as you test.",
+  },
+  todo: {
+    title: "To-do list",
+    description: "Assign and check off work queued from the Idea Lab or Virtual Pit.",
+  },
+} as const;
+
 type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; identity?: boolean; starred?: boolean };
 const labels: Record<Kind, string> = { problem: "problem", inspiration: "inspiration", idea: "idea", comment: "comment", test: "test", vote: "star", resolution: "resolution", completion: "completion" };
 const actionTitles: Partial<Record<Kind, string>> = { test: "Log a test run", vote: "Star this idea", resolution: "Select as solution", completion: "Mark idea complete" };
@@ -49,7 +64,8 @@ export default function Board({
 }: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string }) {
   const [team, setTeam] = useState<TeamInfo>();
   const [entries, setEntries] = useState(initialEntries);
-  const [tab, setTab] = useState<"problem" | "inspiration" | "todo">("inspiration");
+  const [tab, setTab] = useState<keyof typeof boardSections>("inspiration");
+  const section = boardSections[tab];
   const [todos, setTodos] = useState<Todo[]>([]);
   const [pendingTodo, setPendingTodo] = useState<string>();
   const [assignment, setAssignment] = useState<{ idea: Entry; todo?: Todo }>();
@@ -287,7 +303,7 @@ export default function Board({
     const childIdeas = childrenOf(parent.id);
     const shownIdeas = !search || matches(parent) ? childIdeas : childIdeas.filter(matches);
     return <>
-      <div className="detail-head"><h3>{isProblem ? "Ideas to test" : "Ideas"}</h3><button className="quiet" disabled={!ready} onClick={() => open({ kind: "idea", parent: parent.id, context: parent.title })}>＋ Add idea</button></div>
+      <div className="detail-head"><h4>{isProblem ? "Ideas to test" : "Ideas"}</h4><button className="quiet" disabled={!ready} onClick={() => open({ kind: "idea", parent: parent.id, context: parent.title })}>＋ Add idea</button></div>
       {shownIdeas.map(i => {
         const items = entries.filter(e => e.parent === i.id);
         const comments = items.filter(e => ["comment", "resolution", "completion"].includes(e.kind));
@@ -359,67 +375,71 @@ export default function Board({
     </div></header>
     <main className="wrap">
       <section className="hero">
-        <div><h1>FTC Workshop</h1><p className="workshop-credit">By the Protostars 17097</p></div>
+        <div><h1>FTC Workshop</h1><p className="workshop-credit">by Team 17097 Protostars</p></div>
         <div className="stats"><div><strong>{problems.length}</strong><span>Problems</span></div><div><strong>{ideas.length}</strong><span>Ideas</span></div><div><strong>{inspirations.length}</strong><span>Inspirations</span></div></div>
       </section>
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Board controls">
         <div className="tabs">
-          <button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>Idea Lab</button>
-          <button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>Virtual Pit</button>
-          <button className={tab === "todo" ? "active" : ""} aria-pressed={tab === "todo"} onClick={() => {setTab("todo"); setSearch("");}}>To-do list</button>
+          <button className={tab === "inspiration" ? "active" : ""} aria-pressed={tab === "inspiration"} onClick={() => {setTab("inspiration"); setSearch("");}}>{boardSections.inspiration.title}</button>
+          <button className={tab === "problem" ? "active" : ""} aria-pressed={tab === "problem"} onClick={() => {setTab("problem"); setSearch("");}}>{boardSections.problem.title}</button>
+          <button className={tab === "todo" ? "active" : ""} aria-pressed={tab === "todo"} onClick={() => {setTab("todo"); setSearch("");}}>{boardSections.todo.title}</button>
         </div>
         <div className="tools"><input type="search" placeholder={tab === "problem" ? "Find a problem or idea" : tab === "todo" ? "Find a to-do" : "Find inspiration"} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />{tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ {tab === "problem" ? "Add problem" : "Add inspiration"}</button>}</div>
       </section>
-      {tab === "problem" ? <div className="board">
-        <aside className="problem-list" aria-label="Problems">
-          <div className="eyebrow">ACTIVE PROBLEMS <span>{activeProblems.length}</span></div>
-          {problemLinks(activeProblems, false)}
-          {!activeProblems.length && <p className="empty">No active problems{search ? " match" : ""}.</p>}
-          <hr className="problem-divider" />
-          <div className="eyebrow">SOLVED PROBLEMS <span>{solvedProblems.length}</span></div>
-          {problemLinks(solvedProblems, true)}
-          {!solvedProblems.length && <p className="empty">No solved problems{search ? " match" : " yet"}.</p>}
-        </aside>
-        {current && <section className="detail" aria-label="Selected problem">
-          <div className="editable-entry">
-            <div className="problem-meta"><span className="eyebrow">PROBLEM</span><ProblemStatus status={resolution ? "resolved" : current.severity ?? "medium"} full /></div><h2>{current.title}</h2><p className="body">{current.body}</p>
-            <EditButton entry={current} disabled={!ready} onClick={() => edit(current)} />
-          </div>
-          {current.author !== "Competition debrief" && <p className="meta">Added by {current.author}</p>}
-          {resolution && solution && <div className="resolution-panel">
-            <div className="discussion-head"><h3>✓ Resolution</h3><button className="quiet small" disabled={!ready || saving || !name} onClick={() => void reopen(current)}>Reopen problem</button></div>
-            <button type="button" className="quiet small" onClick={() => expand(solution.id)}>{solution.title}</button>
-            <p className="body">{resolution.body}</p><p className="meta">Resolved by {resolution.author}</p>
-          </div>}
-          {ideaCards(current)}
-        </section>}
-      </div> : tab === "inspiration" ? <section className="inspiration"><h2>What sparked an idea?</h2><p className="body">Share something you saw at a competition or an idea to try this season. It could be a robot design, a better battery charging station, or a new way to run practice.</p>
-        <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id}>
-          <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
-          {discussion(i, entries.filter(e => e.kind === "comment" && e.parent === i.id))}
-          {ideaCards(i)}
-        </article>)}</div>
-        {!inspirations.some(visible) && <p className="empty">No matching inspiration.</p>}
-      </section> : <section className="detail todo-list">
-        <h2>To-do list</h2>
-        <p className="body">Queue ideas from the Idea Lab or Virtual Pit, then check them off here. Open any idea to see its discussion.</p>
-        {[false, true].map(done => {
-          const items = todoRows.filter(row => row.todo.done === done);
-          return <section className="discussion" key={String(done)}>
-            <h3>{done ? "Checked off" : "To do"} <small className="meta">{items.length}</small></h3>
-            {!items.length && <p className="meta">{done ? "Nothing checked off yet." : search ? "No matching to-dos." : "No ideas queued yet."}</p>}
-            {items.map(({ idea, parent, todo }) => <div className="todo-row" key={idea.id}>
-              <input type="checkbox" checked={done} disabled={!ready || Boolean(pendingTodo)} aria-label={done ? `Reopen ${idea.title} on the to-do list` : `Check off ${idea.title}`} onChange={event => void saveTodo(idea.id, { action: "set-todo-done", done: event.currentTarget.checked })} />
-              <div><button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button><p className="meta">{parent.kind === "problem" ? "Problem" : "Inspiration"} · {parent.title}</p></div>
-              <div className="todo-assignee editable-entry">
-                <span>{todo.assignee || "Unassigned"}</span>
-                <EditButton entry={idea} label={`Edit assignee for ${idea.title}`} disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(idea, todo)} />
-              </div>
-            </div>)}
-          </section>;
-        })}
-      </section>}
+      <section aria-labelledby="board-section-title">
+        <header className="section-intro">
+          <h2 id="board-section-title">{section.title}</h2>
+          <p>{section.description}</p>
+        </header>
+        {tab === "problem" ? <div className="board">
+          <aside className="problem-list" aria-label="Problems">
+            <div className="eyebrow">ACTIVE PROBLEMS <span>{activeProblems.length}</span></div>
+            {problemLinks(activeProblems, false)}
+            {!activeProblems.length && <p className="empty">No active problems{search ? " match" : ""}.</p>}
+            <hr className="problem-divider" />
+            <div className="eyebrow">SOLVED PROBLEMS <span>{solvedProblems.length}</span></div>
+            {problemLinks(solvedProblems, true)}
+            {!solvedProblems.length && <p className="empty">No solved problems{search ? " match" : " yet"}.</p>}
+          </aside>
+          {current && <section className="detail" aria-label="Selected problem">
+            <div className="editable-entry">
+              <div className="problem-meta"><span className="eyebrow">PROBLEM</span><ProblemStatus status={resolution ? "resolved" : current.severity ?? "medium"} full /></div><h3>{current.title}</h3><p className="body">{current.body}</p>
+              <EditButton entry={current} disabled={!ready} onClick={() => edit(current)} />
+            </div>
+            {current.author !== "Competition debrief" && <p className="meta">Added by {current.author}</p>}
+            {resolution && solution && <div className="resolution-panel">
+              <div className="discussion-head"><h4>✓ Resolution</h4><button className="quiet small" disabled={!ready || saving || !name} onClick={() => void reopen(current)}>Reopen problem</button></div>
+              <button type="button" className="quiet small" onClick={() => expand(solution.id)}>{solution.title}</button>
+              <p className="body">{resolution.body}</p><p className="meta">Resolved by {resolution.author}</p>
+            </div>}
+            {ideaCards(current)}
+          </section>}
+        </div> : tab === "inspiration" ? <div className="inspiration">
+          <div className="inspiration-grid">{inspirations.filter(visible).map(i => <article className="inspiration-card" key={i.id}>
+            <div className="editable-entry"><div className="eyebrow">INSPIRATION</div><h3>{i.title}</h3><p className="body">{i.body}</p><p className="meta">{i.author}</p><EditButton entry={i} disabled={!ready} onClick={() => edit(i)} /></div>
+            {discussion(i, entries.filter(e => e.kind === "comment" && e.parent === i.id))}
+            {ideaCards(i)}
+          </article>)}</div>
+          {!inspirations.some(visible) && <p className="empty">No matching inspiration.</p>}
+        </div> : <div className="detail todo-list">
+          {[false, true].map(done => {
+            const items = todoRows.filter(row => row.todo.done === done);
+            return <section className="discussion" key={String(done)}>
+              <h3>{done ? "Checked off" : "To do"} <small className="meta">{items.length}</small></h3>
+              {!items.length && <p className="meta">{done ? "Nothing checked off yet." : search ? "No matching to-dos." : "No ideas queued yet."}</p>}
+              {items.map(({ idea, parent, todo }) => <div className="todo-row" key={idea.id}>
+                <input type="checkbox" checked={done} disabled={!ready || Boolean(pendingTodo)} aria-label={done ? `Reopen ${idea.title} on the to-do list` : `Check off ${idea.title}`} onChange={event => void saveTodo(idea.id, { action: "set-todo-done", done: event.currentTarget.checked })} />
+                <div><button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button><p className="meta">{parent.kind === "problem" ? "Problem" : "Inspiration"} · {parent.title}</p></div>
+                <div className="todo-assignee editable-entry">
+                  <span>{todo.assignee || "Unassigned"}</span>
+                  <EditButton entry={idea} label={`Edit assignee for ${idea.title}`} disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(idea, todo)} />
+                </div>
+              </div>)}
+            </section>;
+          })}
+        </div>}
+      </section>
       <footer>{team ? team.name + " · Team " + team.number : "FTC Workshop"}</footer>
     </main>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
