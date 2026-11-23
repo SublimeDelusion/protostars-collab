@@ -1,14 +1,17 @@
-import { and, asc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { env } from "cloudflare:workers";
 import { contributions, people, todos } from "../../../db/schema";
 import { PAGES_ORIGIN, workshopInviteLink } from "../../../lib/pages-origin";
-import { issueTeamInvite } from "../../../lib/team-invites";
+import { issueTeamInvite, replaceTeamInvite } from "../../../lib/team-invites";
 import { DEFAULT_TEAM, teamFor, teamInfo, teamSeed } from "../../../lib/teams";
 import { NAME_COOKIE, boardCookie, displayName, displayNameKey, normalizeDisplayName } from "../../../lib/board-cookies";
 import { compareTaskRank, enhancementOutcomes, severities, taskStatus, taskStatuses, withoutEntryBranches, type Entry, type Kind, type Severity } from "../../../lib/board";
 
 const editableKinds = ["problem", "idea", "inspiration", "enhancement"];
+const sharedEnhancements = "@enhancements";
+const ownedByTeam = (number: string) => or(eq(contributions.team, number), and(eq(contributions.team, sharedEnhancements), eq(contributions.ownerTeam, number)));
+const sharedVoteKey = (team: string, key: string) => team + ":" + key;
 const trim = (value: unknown) => typeof value === "string" ? value.trim() : "";
 const validSeverity = (value: unknown): value is Severity => severities.some(severity => severity === value);
 const response = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -23,6 +26,7 @@ function publicEntry(row: typeof contributions.$inferSelect | Entry, source?: st
   const starred = "starVoter" in row ? row.starVoter !== null : row.starred === true;
   const active = "outcomeFor" in row ? row.outcomeFor !== null : row.active === true;
   return { id, kind: kind as Kind, parent, title, body, author: source ?? author, created, ...(source ? { source } : {}), ...(starred ? { starred: true } : {}),
+    ...(row.ownerTeam ? { ownerTeam: row.ownerTeam } : {}),
     ...(kind === "resolution" || kind === "completion" ? { active } : {}),
     ...(kind === "problem" ? { severity: row.severity ?? "medium" } : {}) };
 }
@@ -32,9 +36,12 @@ export async function GET(request: Request) {
   const number = team.number;
   const db = getDb();
   if (new URL(request.url).searchParams.get("report") === "adoption") {
-    if (number !== DEFAULT_TEAM) return response({ error: "The adoption report is available to Protostars." }, 403);
-    const teams = await db.all<{ number: string; name: string; claimed: number; problems: number; inspirations: number; tasks: number }>(sql`
-      select team.number, team.name, team.claimed_at is not null as claimed,
+    if (number !== DEFAULT_TEAM) return response({ error: "The Alliances report is available to Protostars." }, 403);
+    const teams = await db.all<{ number: string; name: string; invitedBy: string | null; claimed: number; problems: number; inspirations: number; tasks: number }>(sql`
+      select team.number, team.name,
+        case when coalesce(team.invited_by, ${DEFAULT_TEAM}) = ${DEFAULT_TEAM} then 'Protostars'
+          else coalesce(inviter.name, team.invited_by) end as invitedBy,
+        team.claimed_at is not null as claimed,
         (select count(*) from contributions c where c.team = team.number and c.kind = 'problem'
           and not exists (select 1 from contributions d where d.team = c.team and d.id = 'deleted:' || c.id)) as problems,
         (select count(*) from contributions c where c.team = team.number and c.kind = 'inspiration'
@@ -44,12 +51,13 @@ export async function GET(request: Request) {
           join contributions c on c.team = i.team and c.id = i.parent
           where t.team = team.number
           and not exists (select 1 from contributions d where d.team = t.team and d.id in ('deleted:' || i.id, 'deleted:' || c.id))) as tasks
-      from workshop_teams team order by team.claimed_at is null, team.name collate nocase, team.number
+      from workshop_teams team left join workshop_teams inviter on inviter.number = team.invited_by
+      order by team.claimed_at is null, team.name collate nocase, team.number
     `);
     return response({ teams: teams.map(team => ({ ...team, claimed: Boolean(team.claimed) })) });
   }
   const [rows, tasks, roster] = await Promise.all([
-    db.select().from(contributions).where(eq(contributions.team, number)).orderBy(asc(contributions.created), asc(contributions.id)),
+    db.select().from(contributions).where(inArray(contributions.team, [number, sharedEnhancements])).orderBy(asc(contributions.created), asc(contributions.id)),
     db.select().from(todos).where(eq(todos.team, number)).orderBy(asc(todos.created), asc(todos.ideaId)),
     db.select().from(people).where(eq(people.team, number)),
   ]);
@@ -67,13 +75,14 @@ export async function GET(request: Request) {
     const person = rosterByKey.get(displayNameKey(value));
     return (person?.renamedTo ? rosterByKey.get(person.renamedTo)?.name : person?.name) ?? value;
   };
-  const visible = withoutEntryBranches(normalized, hidden).map(entry => ({ ...entry, author: currentName(entry.author) }));
+  const visible = withoutEntryBranches(normalized, hidden).map(entry => !entry.ownerTeam || entry.ownerTeam === number
+    ? { ...entry, author: currentName(entry.author) } : entry);
   const byId = new Map(visible.map(entry => [entry.id, publicEntry(entry, seedSources.get(entry.id))]));
   const previousName = displayName(request);
   const name = currentName(previousName);
   const key = displayNameKey(name);
-  const ownCommentIds = key ? visible.filter(row => row.kind === "comment" && displayNameKey(row.author) === key).map(row => row.id) : [];
-  const names = new Map(rows.filter(row => row.kind !== deletionKind && row.author && row.author !== "Competition debrief").map(row => {
+  const ownCommentIds = key ? visible.filter(row => row.kind === "comment" && (!row.ownerTeam || row.ownerTeam === number) && displayNameKey(row.author) === key).map(row => row.id) : [];
+  const names = new Map(rows.filter(row => (!row.ownerTeam || row.ownerTeam === number) && row.kind !== deletionKind && row.author && row.author !== "Competition debrief").map(row => {
     const author = currentName(row.author);
     return [displayNameKey(author), author];
   }));
@@ -105,7 +114,7 @@ async function canonicalName(db: ReturnType<typeof getDb>, number: string, value
   const key = displayNameKey(value);
   const person = await findPerson(db, number, key);
   if (person) return person.renamedTo ? undefined : person.name;
-  const rows = await db.selectDistinct({ author: contributions.author }).from(contributions).where(and(eq(contributions.team, number), ne(contributions.kind, deletionKind)));
+  const rows = await db.selectDistinct({ author: contributions.author }).from(contributions).where(and(ownedByTeam(number), ne(contributions.kind, deletionKind)));
   return rows.find(row => row.author !== "Competition debrief" && displayNameKey(row.author) === key)?.author;
 }
 
@@ -132,7 +141,7 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
   }
 
   const [authors, assignments] = await Promise.all([
-    db.selectDistinct({ value: contributions.author }).from(contributions).where(eq(contributions.team, team)),
+    db.selectDistinct({ value: contributions.author }).from(contributions).where(ownedByTeam(team)),
     db.selectDistinct({ value: todos.assignee }).from(todos).where(eq(todos.team, team)),
   ]);
   const oldValues = (rows: { value: string | null }[]) => rows.flatMap(({ value }) =>
@@ -151,10 +160,11 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
   const updates = [
     ...rosterChanges,
     db.update(contributions).set({ starVoter: key }).where(and(eq(contributions.team, team), eq(contributions.starVoter, oldKey))),
+    db.update(contributions).set({ starVoter: sharedVoteKey(team, key) }).where(and(eq(contributions.team, sharedEnhancements), eq(contributions.starVoter, sharedVoteKey(team, oldKey)))),
   ];
   try {
     await db.batch([updates[0]!, ...updates.slice(1),
-      ...oldAuthors.map(author => db.update(contributions).set({ author: name }).where(and(eq(contributions.team, team), eq(contributions.author, author)))),
+      ...oldAuthors.map(author => db.update(contributions).set({ author: name }).where(and(ownedByTeam(team), eq(contributions.author, author)))),
       ...oldAssignments.map(assignee => db.update(todos).set({ assignee: name }).where(and(eq(todos.team, team), eq(todos.assignee, assignee)))),
     ]);
   } catch (error) {
@@ -164,7 +174,7 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
     throw error;
   }
   const comments = await db.select({ id: contributions.id }).from(contributions)
-    .where(and(eq(contributions.team, team), eq(contributions.kind, "comment"), eq(contributions.author, name)));
+    .where(and(ownedByTeam(team), eq(contributions.kind, "comment"), eq(contributions.author, name)));
   const result = response({ displayName: name, ownCommentIds: comments.map(comment => comment.id) });
   result.headers.set("Set-Cookie", boardCookie(NAME_COOKIE, name));
   return result;
@@ -172,7 +182,7 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
 
 async function findEntry(db: ReturnType<typeof getDb>, number: string, id: string): Promise<typeof contributions.$inferSelect | Entry | undefined> {
   if (id.length > 80 || id.startsWith("deleted:") || retiredSeedIds(number).includes(id)) return undefined;
-  const rows = await db.select().from(contributions).where(and(eq(contributions.team, number), inArray(contributions.id, [id, deletionId(id)])));
+  const rows = await db.select().from(contributions).where(and(inArray(contributions.team, [number, sharedEnhancements]), inArray(contributions.id, [id, deletionId(id)])));
   if (rows.some(row => row.kind === deletionKind)) return undefined;
   const entry = rows[0] ?? teamSeed(number).find(item => item.id === id);
   if (entry?.parent && !await findEntry(db, number, entry.parent)) return undefined;
@@ -182,7 +192,7 @@ async function findEntry(db: ReturnType<typeof getDb>, number: string, id: strin
 function recordProblemActivity(db: ReturnType<typeof getDb>, team: string, parent: string, kind: "priority-change" | "reopened", author: string, title: string, when: SQL) {
   // Insert the event only if the pending write changes the stored state.
   return db.insert(contributions).select(sql`select
-    ${team}, ${crypto.randomUUID()}, ${kind}, ${parent}, ${title}, '', ${author}, ${new Date().toISOString()}, null, null, null
+    ${team}, ${crypto.randomUUID()}, ${kind}, ${parent}, ${title}, '', ${author}, ${new Date().toISOString()}, null, null, null, null
     where ${when}`).returning();
 }
 
@@ -205,8 +215,14 @@ export async function POST(request: Request) {
   const input = await readInput(request);
   if (input instanceof Response) return input;
   const db = getDb();
+  if (input.action === "replace-team-invite") {
+    if (number !== DEFAULT_TEAM) return response({ error: "Only Protostars can reissue invites from Alliances." }, 403);
+    if (!env.DB) throw new Error("Workshop database unavailable");
+    const token = await replaceTeamInvite(env.DB, trim(input.teamNumber));
+    return token ? response({ url: workshopInviteLink(token) }, 201)
+      : response({ error: "This team has already joined or has no pending invitation." }, 409);
+  }
   if (input.action === "invite-team") {
-    if (number !== DEFAULT_TEAM) return response({ error: "Only Protostars can invite a new team." }, 403);
     const teamNumber = trim(input.teamNumber);
     const name = trim(input.teamName);
     const message = trim(input.message);
@@ -214,7 +230,7 @@ export async function POST(request: Request) {
       return response({ error: "Enter a team name and number, and keep the message under 1,000 characters." }, 400);
     }
     if (!env.DB) throw new Error("Workshop database unavailable");
-    const token = await issueTeamInvite(env.DB, teamNumber, name, message);
+    const token = await issueTeamInvite(env.DB, teamNumber, name, message, number);
     return token ? response({ url: workshopInviteLink(token) }, 201)
       : response({ error: "That team number already has a board or a pending invite under a different name." }, 409);
   }
@@ -240,7 +256,7 @@ export async function POST(request: Request) {
     }
     const name = match ?? proposed;
     await db.insert(people).values({ team: number, key: displayNameKey(name), name }).onConflictDoNothing();
-    const comments = match ? await db.select({ id: contributions.id, author: contributions.author }).from(contributions).where(and(eq(contributions.team, number), eq(contributions.kind, "comment"))) : [];
+    const comments = match ? await db.select({ id: contributions.id, author: contributions.author }).from(contributions).where(and(ownedByTeam(number), eq(contributions.kind, "comment"))) : [];
     const ownCommentIds = comments.filter(row => displayNameKey(row.author) === displayNameKey(name)).map(row => row.id);
     const result = response({ displayName: name, ownCommentIds });
     result.headers.set("Set-Cookie", boardCookie(NAME_COOKIE, name));
@@ -282,12 +298,15 @@ export async function POST(request: Request) {
     : kind === "resolution" ? closesEnhancement ? target?.kind === "enhancement" : target?.kind === "problem"
     : true;
   if (!parentIsValid) return response({ error: "This action is unavailable for that entry." }, 404);
+  if (closesEnhancement && number !== DEFAULT_TEAM) return response({ error: "Only Protostars can close an enhancement request." }, 403);
 
   const starred = kind === "vote" || input.starred === true;
   const outcomeFor = kind === "resolution" ? target?.id : null;
-  const entry: Entry = { id: crypto.randomUUID(), kind, parent, title, body, author, created: new Date().toISOString() };
+  const shared = kind === "enhancement" || target?.kind === "enhancement";
+  const entry: Entry = { id: crypto.randomUUID(), kind, parent, title, body, author, created: new Date().toISOString(), ...(shared ? { ownerTeam: number } : {}) };
   const [saved] = await db.insert(contributions)
-    .values({ ...entry, team: number, severity, outcomeFor, starVoter: starred ? displayNameKey(author) : null })
+    .values({ ...entry, team: shared ? sharedEnhancements : number, severity, outcomeFor,
+      starVoter: starred ? (shared ? sharedVoteKey(number, displayNameKey(author)) : displayNameKey(author)) : null })
     .onConflictDoNothing()
     .returning();
   if (!saved) return response({ error: starred ? "You’ve already starred this item." : outcomeFor ? "This request or problem is already closed." : "Could not save. Please try again." }, 409);
@@ -309,13 +328,16 @@ export async function PATCH(request: Request) {
     const db = getDb();
     const entry = id ? await findEntry(db, number, id) : undefined;
     if (!entry) return response({ deletedId: id });
+    if (entry.ownerTeam && entry.ownerTeam !== number && (entry.kind === "comment" || number !== DEFAULT_TEAM)) {
+      return response({ error: "You can’t delete this entry." }, 403);
+    }
     const author = await currentDisplayName(db, number, displayName(request));
     const name = displayNameKey(author);
     if (entry.kind === "comment" ? !name || name !== displayNameKey(await currentDisplayName(db, number, entry.author)) : !editableKinds.includes(entry.kind)) {
       return response({ error: "You can’t delete this entry." }, 403);
     }
     await db.insert(contributions).values({
-      id: deletionId(id), team: number, kind: deletionKind, parent: id, title: "", body: "",
+      id: deletionId(id), team: entry.ownerTeam ? sharedEnhancements : number, ownerTeam: entry.ownerTeam, kind: deletionKind, parent: id, title: "", body: "",
       author, created: new Date().toISOString(),
     }).onConflictDoNothing();
     return response({ deletedId: id });
@@ -410,13 +432,17 @@ export async function PATCH(request: Request) {
   const seed = teamSeed(number).find(entry => entry.id === id);
   const current = await findEntry(db, number, id);
   if (!current) return response({ error: "This entry could not be found." }, 404);
+  if (current.ownerTeam && current.ownerTeam !== number && (current.kind === "comment" || number !== DEFAULT_TEAM)) {
+    return response({ error: "You can’t edit this entry." }, 403);
+  }
+  const entryTeam = current.ownerTeam ? sharedEnhancements : number;
   if (current.kind === "comment") {
     const name = displayNameKey(await currentDisplayName(db, number, displayName(request)));
     if (!name || name !== displayNameKey(await currentDisplayName(db, number, current.author))) {
       return response({ error: "You can only edit comments posted under your display name." }, 403);
     }
     if (body !== current.body) {
-      await db.update(contributions).set({ body }).where(and(eq(contributions.team, number), eq(contributions.id, id)));
+      await db.update(contributions).set({ body }).where(and(eq(contributions.team, entryTeam), eq(contributions.id, id)));
     }
     return response({ entry: { ...publicEntry(current), body } });
   }
@@ -434,9 +460,9 @@ export async function PATCH(request: Request) {
     return response({ entry: publicEntry(current, seed?.source) });
   }
   const entry = { ...publicEntry(current), title, body };
-  await db.insert(contributions).values({ ...entry, team: number }).onConflictDoUpdate({
+  await db.insert(contributions).values({ ...entry, team: entryTeam }).onConflictDoUpdate({
     target: contributions.id,
-    setWhere: eq(contributions.team, number),
+    setWhere: eq(contributions.team, entryTeam),
     set: { title, body },
   });
   return response({ entry: publicEntry({ ...current, title, body }, seed?.source) });

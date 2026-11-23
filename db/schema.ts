@@ -13,6 +13,7 @@ export const contributions = sqliteTable("contributions", {
   severity: text({ enum: severities }),
   outcomeFor: text("outcome_for"),
   starVoter: text("star_voter"),
+  ownerTeam: text("owner_team"),
 }, table => [
   uniqueIndex("one_active_outcome").on(table.team, table.outcomeFor),
   uniqueIndex("one_star_per_idea_and_voter").on(table.team, table.parent, table.starVoter),
@@ -40,6 +41,7 @@ export const workshopTeams = sqliteTable("workshop_teams", {
   name: text().notNull(),
   accessHash: text("access_hash").unique(),
   claimedAt: text("claimed_at"),
+  invitedBy: text("invited_by"),
 });
 
 export const teamInvites = sqliteTable("team_invites", {
@@ -47,4 +49,20 @@ export const teamInvites = sqliteTable("team_invites", {
   team: text().notNull().references(() => workshopTeams.number),
   message: text().notNull(),
   issuedAt: text("issued_at").notNull(),
+});
+
+export const teamLinks = sqliteTable("team_links", {
+  tokenHash: text("token_hash").primaryKey(),
+  team: text().notNull(),
+});
+
+export const teamSessions = sqliteTable("team_sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  team: text().notNull(),
+  inviteHash: text("invite_hash"),
+});
+
+export const teamShareSettings = sqliteTable("team_share_settings", {
+  team: text().primaryKey(),
+  legacySessionHash: text("legacy_session_hash"),
 });

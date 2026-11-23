@@ -1,8 +1,8 @@
 import handler from "vinext/server/fetch-handler";
 import { BOARD_COOKIE, NAME_COOKIE, boardCookie, readCookie } from "../lib/board-cookies";
-import { PAGES_ORIGIN, INVITE_HEADER, NAME_HEADER, CLAIM_HEADER, workshopInviteLink } from "../lib/pages-origin";
-import { DEFAULT_TEAM, TEAM_HEADER, TEAM_NAME_HEADER, teamForInvite, teams } from "../lib/teams";
-import { claimTeamInvite, findJoinedTeam } from "../lib/team-invites";
+import { PAGES_ORIGIN, INVITE_HEADER, NAME_HEADER, CLAIM_HEADER, SESSION_HEADER, workshopInviteLink } from "../lib/pages-origin";
+import { DEFAULT_TEAM, TEAM_HEADER, TEAM_NAME_HEADER, teams } from "../lib/teams";
+import { claimTeamInvite, findBoardAccess, newBoardToken, issueMagicLink, resumeBoardSession, startBoardSession } from "../lib/team-invites";
 import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
@@ -11,10 +11,12 @@ const worker = {
     const url = new URL(request.url);
     const bindings = env as unknown as Record<string, unknown>;
     const linkHeaders = { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" };
-    if (request.method === "GET" && url.pathname.startsWith("/join/")) {
+    if (env.DB && request.method === "GET" && url.pathname.startsWith("/join/")) {
       const token = url.pathname.slice(6);
-      if (teamForInvite(bindings, token)) {
-        return new Response(null, { status: 303, headers: { ...linkHeaders, Location: "/", "Set-Cookie": boardCookie(BOARD_COOKIE, token) } });
+      const access = await findBoardAccess(env.DB, bindings, token);
+      const session = newBoardToken();
+      if (access && access.kind !== "session" && await startBoardSession(env.DB, access.team.number, access.kind, token, session)) {
+        return new Response(null, { status: 303, headers: { ...linkHeaders, Location: "/", "Set-Cookie": boardCookie(BOARD_COOKIE, session) } });
       }
     }
     const fromPages = url.pathname === "/api/board" && request.headers.get("Origin") === PAGES_ORIGIN;
@@ -22,7 +24,7 @@ const worker = {
       "Access-Control-Allow-Origin": PAGES_ORIGIN,
       "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
       "Access-Control-Allow-Headers": `Content-Type, ${INVITE_HEADER}, ${NAME_HEADER}, ${CLAIM_HEADER}`,
-      "Access-Control-Expose-Headers": NAME_HEADER,
+      "Access-Control-Expose-Headers": `${NAME_HEADER}, ${SESSION_HEADER}`,
       "Vary": "Origin",
     };
     if (fromPages && request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
@@ -33,13 +35,22 @@ const worker = {
       return claim ? Response.json(claim, { headers })
         : Response.json({ error: "This invite is invalid or has already been used. Ask the team for a teammate link." }, { status: 404, headers });
     }
-    const invitedTeam = teamForInvite(bindings, token) ?? (env.DB ? await findJoinedTeam(env.DB, token) : undefined);
+    const isBoardGet = request.method === "GET" && url.pathname === "/api/board";
+    const session = isBoardGet ? fromPages ? request.headers.get(CLAIM_HEADER) ?? "" : newBoardToken() : "";
+    const access = env.DB ? await findBoardAccess(env.DB, bindings, token) : undefined;
+    const resumedTeam = env.DB && !access && session ? await resumeBoardSession(env.DB, token, session) : undefined;
+    const upgradedTeam = env.DB && access && access.kind !== "session" && session &&
+      await startBoardSession(env.DB, access.team.number, access.kind, token, session) ? access.team : undefined;
+    const sessionStarted = Boolean(resumedTeam ?? upgradedTeam);
+    const invitedTeam = resumedTeam ?? upgradedTeam ?? (access?.kind === "session" || access?.kind === "legacy" ? access.team : undefined);
     const team = invitedTeam ?? (import.meta.env.DEV ? teams.find(item => item.number === DEFAULT_TEAM) : undefined);
-    if (request.method === "GET" && url.pathname === "/api/board" && url.searchParams.get("share") === "invite") {
+    if (url.pathname === "/api/board" && url.searchParams.get("share") === "invite") {
       const headers = { ...linkHeaders, ...(fromPages ? cors : {}) };
-      return invitedTeam
-        ? Response.json({ url: workshopInviteLink(token) }, { headers })
-        : Response.json({ error: "Open the team’s invite link first." }, { status: 404, headers });
+      if (!access || !env.DB) return Response.json({ error: "Open the team’s invite link first." }, { status: 404, headers });
+      if (request.method !== "POST") return Response.json({ error: "Refresh the Workshop to create a new invite link." }, { status: 405, headers });
+      if (access.kind !== "session") return Response.json({ error: "Refresh the Workshop to upgrade your session." }, { status: 409, headers });
+      if (!fromPages && request.headers.get("Origin") !== url.origin) return Response.json({ error: "Origin does not match." }, { status: 403, headers });
+      return Response.json({ url: workshopInviteLink(await issueMagicLink(env.DB, access.team.number)) }, { headers });
     }
     const logo = request.method === "GET" && teams.some(item => item.logo === url.pathname);
     if (!team && !logo) {
@@ -94,6 +105,10 @@ const worker = {
         const cookies = headers.getSetCookie();
         headers.delete("Set-Cookie");
         for (const cookie of cookies) headers.append("Set-Cookie", cookie.startsWith(NAME_COOKIE + "=") ? teamCookie + cookie.slice(NAME_COOKIE.length) : cookie);
+      }
+      if (sessionStarted && response.ok) {
+        if (fromPages) headers.set(SESSION_HEADER, "1");
+        else headers.append("Set-Cookie", boardCookie(BOARD_COOKIE, session));
       }
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     });

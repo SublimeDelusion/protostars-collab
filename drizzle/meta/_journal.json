@@ -78,6 +78,13 @@
       "when": 1795416888103,
       "tag": "0010_workshop_team_invites",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795417700594,
+      "tag": "0011_alliances_and_shared_enhancements",
+      "breakpoints": true
     }
   ]
 }

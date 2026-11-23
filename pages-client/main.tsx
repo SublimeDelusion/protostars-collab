@@ -1,21 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Board from "../app/board";
-import { CLAIM_HEADER, INVITE_HEADER, NAME_HEADER } from "../lib/pages-origin";
+import { CLAIM_HEADER, INVITE_HEADER, NAME_HEADER, SESSION_HEADER } from "../lib/pages-origin";
 import "../app/globals.css";
 
 const backend = "https://ftc-17097-debrief.hopefulbeam4.chatgpt.site";
 const inviteKey = "protostars-invite";
 const nameKey = "protostars-name";
 
-function requestFor(key: string): typeof fetch {
-  const teamNameKey = nameKey + ":" + key;
+function requestFor(key: string, onUpgrade?: (session: string) => void): typeof fetch {
+  let teamNameKey = nameKey + ":" + key;
   let name = localStorage.getItem(teamNameKey) ?? "";
   return async (input, init) => {
     const headers = new Headers(init?.headers);
     headers.set(INVITE_HEADER, key);
     if (name) headers.set(NAME_HEADER, name);
+    const storageKey = inviteKey + ":session:" + key;
+    const upgrade = onUpgrade && input === "/api/board" && (!init?.method || init.method === "GET");
+    const candidate = upgrade ? localStorage.getItem(storageKey) ?? crypto.randomUUID() + crypto.randomUUID() : "";
+    if (candidate) {
+      localStorage.setItem(storageKey, candidate);
+      headers.set(CLAIM_HEADER, candidate);
+    }
     const response = await fetch(backend + input, { ...init, headers, credentials: "omit" });
+    if (candidate && response.headers.get(SESSION_HEADER) === "1") {
+      key = candidate;
+      teamNameKey = nameKey + ":" + key;
+      if (name) localStorage.setItem(teamNameKey, name);
+      onUpgrade?.(key);
+      onUpgrade = undefined;
+    }
+    if (candidate && response.ok) localStorage.removeItem(storageKey);
     const updatedName = response.headers.get(NAME_HEADER);
     if (updatedName) {
       name = updatedName;
@@ -65,7 +80,10 @@ function Pages() {
     setBusy(true);
     try {
       let activeKey = key;
-      let send = requestFor(key);
+      let send = requestFor(key, session => {
+        activeKey = session;
+        if (connection.current === attempt) localStorage.setItem(inviteKey, session);
+      });
       let response = await send("/api/board");
       if (connection.current !== attempt) return;
       if (response.status === 404 && new URLSearchParams(location.hash.slice(1)).get("invite") === key) {

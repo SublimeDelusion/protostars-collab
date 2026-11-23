@@ -30,7 +30,7 @@ const boardSections = {
   enhancement: {
     title: "App enhancements",
     search: "Find a request",
-    description: "Suggest improvements to FTC Workshop, discuss them, and star the requests you’d use.",
+    description: "Suggest improvements, discuss them, and star requests with other Workshop teams.",
   },
 } as const;
 const mainSections = ["inspiration", "problem", "todo", "activity"] as const;
@@ -164,6 +164,7 @@ export default function Board({
   const inviteDialog = useRef<HTMLDialogElement>(null);
   const adoptionDialog = useRef<HTMLDialogElement>(null);
   const [issuedInvite, setIssuedInvite] = useState("");
+  const [teammateInvite, setTeammateInvite] = useState(false);
   const [inviteError, setInviteError] = useState("");
   const [issuingInvite, setIssuingInvite] = useState(false);
   const [inviteCopied, setInviteCopied] = useState(false);
@@ -292,7 +293,7 @@ export default function Board({
       setOwnCommentIds(data.ownCommentIds);
       if (renaming) {
         const wasMine = (value: string) => displayNameKey(value) === displayNameKey(name);
-        setEntries(items => items.map(entry => !entry.source && wasMine(entry.author) ? { ...entry, author: data.displayName } : entry));
+        setEntries(items => items.map(entry => (!entry.ownerTeam || entry.ownerTeam === team?.number) && !entry.source && wasMine(entry.author) ? { ...entry, author: data.displayName } : entry));
         setTodos(items => items.map(todo => todo.assignee && wasMine(todo.assignee) ? { ...todo, assignee: data.displayName } : todo));
         setKnownNames(names => [...names.filter(candidate => !wasMine(candidate)), data.displayName].sort((a, b) => a.localeCompare(b)));
       }
@@ -372,13 +373,16 @@ export default function Board({
     }
   }
 
-  async function copyInvite() {
+  async function copyInvite(teamNumber?: string) {
+    if (copying) return;
     setCopying(true);
+    const invite = (teamNumber ? request("/api/board", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "replace-team-invite", teamNumber }),
+    }) : request("/api/board?share=invite", { method: "POST" })).then(async res => {
+      if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not create an invite link.");
+      return (await res.json() as { url: string }).url;
+    });
     try {
-      const invite = request("/api/board?share=invite", { cache: "no-store" }).then(async res => {
-        if (!res.ok) throw new Error("Invite unavailable.");
-        return (await res.json() as { url: string }).url;
-      });
       if (typeof ClipboardItem === "function" && navigator.clipboard.write) {
         await navigator.clipboard.write([new ClipboardItem({
           "text/plain": invite.then(url => new Blob([url], { type: "text/plain" })),
@@ -386,9 +390,28 @@ export default function Board({
       } else {
         await navigator.clipboard.writeText(await invite);
       }
-      setNotice("Team invite link copied.");
+      if (!teamNumber) setNotice("One-time invite link copied.");
+      else {
+        setTeammateInvite(false);
+        setIssuedInvite(await invite);
+        setInviteCopied(true);
+        setInviteError("");
+        adoptionDialog.current?.close();
+        inviteDialog.current?.showModal();
+      }
     } catch {
-      setNotice("Couldn’t copy the invite link. Try again.");
+      try {
+        setIssuedInvite(await invite);
+        setTeammateInvite(!teamNumber);
+        setInviteError("Select the invite link below to copy it.");
+        setInviteCopied(false);
+        adoptionDialog.current?.close();
+        inviteDialog.current?.showModal();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not create the invite.";
+        if (teamNumber) setAdoptionError(message);
+        else setNotice(message);
+      }
     } finally {
       setCopying(false);
     }
@@ -399,7 +422,7 @@ export default function Board({
       const response = await request("/api/board", { cache: "no-store" });
       if (!response.ok) throw new Error();
       const { version, team, teamInfo, entries, todos = [] } = await response.json() as { version: number; team: string; teamInfo?: TeamInfo; entries: Entry[]; todos?: Todo[] };
-      const blob = new Blob([JSON.stringify({ version, team, teamInfo, entries, todos }, null, 2)], { type: "application/json" });
+      const blob = new Blob([JSON.stringify({ version, team, teamInfo, entries: entries.filter(entry => !entry.ownerTeam), todos }, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url; link.download = `ftc-${team}-board.json`; link.click();
@@ -408,6 +431,7 @@ export default function Board({
   }
 
   function openTeamInvite() {
+    setTeammateInvite(false);
     setIssuedInvite("");
     setInviteError("");
     setInviteCopied(false);
@@ -440,7 +464,7 @@ export default function Board({
       const res = await request("/api/board?report=adoption", { cache: "no-store" });
       if (!res.ok) throw new Error();
       setAdoption((await res.json() as { teams: AdoptionRow[] }).teams);
-    } catch { setAdoptionError("Could not load the adoption report. Try again."); }
+    } catch { setAdoptionError("Could not load Alliances. Try again."); }
   }
 
   async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-status"; status: TaskStatus } | { action: "move-todo"; status: TaskStatus; before?: string; assignee?: string | null }) {
@@ -637,7 +661,7 @@ export default function Board({
     if (touchDrag.current?.pointerId === event.pointerId) clearTaskDrag();
   }
 
-  const recentActivity = tab === "activity" ? groupActivity(entries, lookup, search) : [];
+  const recentActivity = tab === "activity" ? groupActivity(entries.filter(entry => !entry.ownerTeam || entry.ownerTeam === team?.number), lookup, search) : [];
 
   function showIdea(idea: Entry, parent: Entry, focusId = "idea-toggle-" + idea.id) {
     setSearch("");
@@ -707,7 +731,7 @@ export default function Board({
   }
 
   function starButton(entry: Entry, votes: Entry[], withComment = false) {
-    const hasVoted = Boolean(name) && votes.some(vote => displayNameKey(vote.author) === displayNameKey(name));
+    const hasVoted = Boolean(name) && votes.some(vote => (!vote.ownerTeam || vote.ownerTeam === team?.number) && displayNameKey(vote.author) === displayNameKey(name));
     const subject = entry.kind === "enhancement" ? "request" : "idea";
     return <button type="button" className="star-button"
       aria-label={`${hasVoted ? "You starred" : "Star"} ${entry.title}. ${votes.length} ${votes.length === 1 ? "star" : "stars"}`}
@@ -818,11 +842,11 @@ export default function Board({
           event.currentTarget.closest("details")?.removeAttribute("open");
           setMenuOpen(false);
           void copyInvite();
-        }}>Copy teammate invite link</button>
-        {canManageTeams && <button type="button" className="quiet" disabled={!ready} onClick={event => {
+        }}>Copy one-time teammate link</button>
+        <button type="button" className="quiet" disabled={!ready} onClick={event => {
           event.currentTarget.closest("details")?.removeAttribute("open");
           openTeamInvite();
-        }}>Invite a new team</button>}
+        }}>Invite a new team</button>
       </div>
       </details>
       {name ? <details className="profile-menu" onKeyDown={event => {
@@ -948,8 +972,8 @@ export default function Board({
                     </button></h4>
                     {isOpen && <div className="enhancement-tools" role="group" aria-label="Request actions">
                       {starButton(entry, votes)}
-                      <EditButton entry={entry} label="Edit request" disabled={!ready || saving} onClick={() => edit(entry)} />
-                      {!outcome && <button type="button" className="quiet enhancement-close" aria-label="Close request" title="Close request" disabled={!ready || saving} onClick={() => open({ kind: "resolution", parent: entry.id, context: entry.title, closeEnhancement: true })}>
+                      {(canManageTeams || entry.ownerTeam === team?.number) && <EditButton entry={entry} label="Edit request" disabled={!ready || saving} onClick={() => edit(entry)} />}
+                      {canManageTeams && !outcome && <button type="button" className="quiet enhancement-close" aria-label="Close request" title="Close request" disabled={!ready || saving} onClick={() => open({ kind: "resolution", parent: entry.id, context: entry.title, closeEnhancement: true })}>
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9h16v11H4zM3 4h18v5H3zm6 9 2 2 4-4"/></svg>
                       </button>}
                     </div>}
@@ -1076,16 +1100,16 @@ export default function Board({
           <div>Last updated <time dateTime={publishedAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/Denver" }).format(new Date(publishedAt))}</time></div>
         </div>
         <div className="footer-actions">
-          {canManageTeams && <button type="button" className="quiet" disabled={!ready} onClick={() => void openAdoption()}>Adoption</button>}
+          {canManageTeams && <button type="button" className="quiet" disabled={!ready} onClick={() => void openAdoption()}>Alliances</button>}
           <button type="button" className="quiet" disabled={!ready} onClick={() => void download()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button>
           <button type="button" className="quiet" aria-current={tab === "enhancement" ? "page" : undefined} onClick={() => navigate("enhancement", true)}>App enhancements</button>
         </div>
       </footer>
     </main>
     <dialog ref={inviteDialog} aria-labelledby="team-invite-title" onCancel={event => { if (issuingInvite) event.preventDefault(); }}>
-      <h2 id="team-invite-title">{issuedInvite ? "Team invite ready" : "Invite a new team"}</h2>
+      <h2 id="team-invite-title">{issuedInvite ? teammateInvite ? "Teammate link ready" : "Team invite ready" : "Invite a new team"}</h2>
       {issuedInvite ? <>
-        <p>Send this link to the team you’re inviting. They’ll use it to claim their own Workshop board.</p>
+        <p>{teammateInvite ? "Send this one-time link to one teammate to join your Workshop board." : "Send this link to the team you’re inviting. They’ll use it to claim their own Workshop board."}</p>
         <label>Invite link<input readOnly value={issuedInvite} onFocus={event => event.currentTarget.select()} /></label>
         {inviteCopied && <p className="notice" role="status">Invite link copied.</p>}
         {inviteError && <p className="notice" role="alert">{inviteError}</p>}
@@ -1109,11 +1133,14 @@ export default function Board({
       </form>}
     </dialog>
     <dialog ref={adoptionDialog} className="adoption-dialog" aria-labelledby="adoption-title">
-      <h2 id="adoption-title">Workshop adoption</h2>
-      {adoptionError ? <p className="notice" role="alert">{adoptionError}</p> : !adoption ? <p role="status">Loading adoption report…</p>
+      <h2 id="adoption-title">Alliances</h2>
+      {adoptionError && <p className="notice" role="alert">{adoptionError}</p>}
+      {!adoption ? !adoptionError && <p role="status">Loading alliances…</p>
         : adoption.length ? <div className="adoption-table"><table>
-          <thead><tr><th scope="col">Team</th><th scope="col">Status</th><th scope="col">Problems</th><th scope="col">Inspirations</th><th scope="col">Tasks</th></tr></thead>
-          <tbody>{adoption.map(row => <tr key={row.number}><th scope="row">{row.name} <span className="meta">#{row.number}</span></th><td>{row.claimed ? "Joined" : "Invited"}</td><td>{row.problems}</td><td>{row.inspirations}</td><td>{row.tasks}</td></tr>)}</tbody>
+          <thead><tr><th scope="col">Team</th><th scope="col">Invited by</th><th scope="col">Status</th><th scope="col">Problems</th><th scope="col">Inspirations</th><th scope="col">Tasks</th><th scope="col">Invite</th></tr></thead>
+          <tbody>{adoption.map(row => <tr key={row.number}><th scope="row">{row.name} <span className="meta">#{row.number}</span></th><td>{row.invitedBy}</td><td>{row.claimed ? "Joined" : "Invited"}</td><td>{row.problems}</td><td>{row.inspirations}</td><td>{row.tasks}</td><td>
+            {row.claimed ? <span className="meta">Claimed</span> : <button type="button" className="quiet small" disabled={copying} aria-label={`Copy invite for ${row.name}`} onClick={() => void copyInvite(row.number)}>Copy invite</button>}
+          </td></tr>)}</tbody>
         </table></div> : <p>No teams invited yet.</p>}
       <div className="dialog-actions"><button type="button" className="quiet" onClick={() => adoptionDialog.current?.close()}>Close</button></div>
     </dialog>
