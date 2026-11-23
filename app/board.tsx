@@ -832,14 +832,18 @@ export default function Board({
                 <span><strong>{latest.entry.author}</strong> {latest.action}</span>
                 <time dateTime={latest.entry.created} title="Mountain time">{activityDate.format(new Date(latest.entry.created))} MT</time>
               </div>
-              <button type="button" className="todo-link" onClick={() => showActivity(target, target)}>{target.title}</button>
-              {target.body && <p className="body activity-preview">{target.body}</p>}
-              {comments.length > 0 && <ul className="activity-comments" aria-label="Recent comments">
-                {comments.map(({ entry }) => <li key={entry.id}>
-                  <button type="button" className="todo-link" aria-label={`${entry.author}’s comment on ${target.title}`} onClick={() => showActivity(entry, target)}>{entry.author}</button>
-                  <p className="body activity-preview">{entry.body}</p>
-                </li>)}
-              </ul>}
+              <div className="activity-content">
+                <h3><button type="button" className="todo-link" onClick={() => showActivity(target, target)}>{target.title}</button></h3>
+                {target.body && <p className="body activity-preview">{target.body}</p>}
+                {comments.length > 0 && <ul className="activity-comments" aria-label="Recent comments">
+                  {comments.map(({ entry }) => <li key={entry.id}>
+                    <button type="button" className="activity-comment-link" onClick={() => showActivity(entry, target)}>
+                      <span className="activity-preview">{entry.body}</span>
+                      <span className="activity-byline">{entry.author}</span>
+                    </button>
+                  </li>)}
+                </ul>}
+              </div>
             </li>)}
           </ol> : <p className="empty">{search.trim() ? "No matching activity." : ready ? "No recent activity yet." : "Loading recent activity…"}</p>
         ) : <div className="kanban-lanes">{lanes.map((lane, laneIndex) => <div className="kanban-lane" key={lane}>
