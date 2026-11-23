@@ -871,8 +871,9 @@ export default function Board({
                   </svg>
                 </div>
                 <div className="kanban-card-content">
-                <button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button>
-                <p className="meta">{parent.title}</p>
+                  <button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button>
+                  <p className="meta">{parent.title}</p>
+                </div>
                 <div className="kanban-actions">
                   <select aria-label={`Assignee for ${idea.title}`} value={todo.assignee ?? ""} disabled={!ready || Boolean(pendingTodo)}
                     onChange={event => void saveTodo(idea.id, { action: "set-todo-assignee", assignee: event.currentTarget.value || null })}>
@@ -884,7 +885,6 @@ export default function Board({
                     onChange={event => void saveTodo(idea.id, { action: "set-todo-status", status: event.currentTarget.value as TaskStatus })}>
                     {taskStatuses.map(option => <option key={option} value={option}>{taskStatusLabels[option]}</option>)}
                   </select>
-                </div>
                 </div>
               </article>)}
             </section>;
