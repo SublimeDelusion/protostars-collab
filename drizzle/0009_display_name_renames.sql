@@ -1,0 +1,1 @@
+ALTER TABLE `people` ADD `renamed_to` text;

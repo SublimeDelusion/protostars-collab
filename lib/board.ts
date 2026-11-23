@@ -1,4 +1,6 @@
 export const severities = ["high", "medium", "low"] as const;
+export const enhancementOutcomes = ["done", "wont-fix"] as const;
+export const enhancementOutcomeLabels = { done: "Done", "wont-fix": "Won’t fix" };
 export type Severity = typeof severities[number];
 export type Kind = "problem" | "idea" | "inspiration" | "enhancement" | "comment" | "test" | "vote" | "resolution" | "completion";
 export type Entry = { id: string; kind: Kind; parent: string | null; title: string; body: string; author: string; source?: string; created: string; starred?: boolean; active?: boolean; severity?: Severity };

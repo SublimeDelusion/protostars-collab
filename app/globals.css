@@ -78,7 +78,7 @@ dialog select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .enhancements{display:grid;gap:14px;width:min(100%,840px)}
 .enhancement-heading{display:flex;align-items:flex-start;gap:8px}
 .enhancement-heading .editable-entry{flex:1;min-width:0}
-.enhancement-heading h3{margin:0 0 6px;font-size:clamp(1.25rem,3vw,1.55rem);line-height:1.2}
+.enhancement-heading h4{margin:0 0 6px;font-size:clamp(1.25rem,3vw,1.55rem);line-height:1.2}
 .enhancement-heading .star-button{margin:0;min-height:44px;flex:none}
 
 .toolbar .tabs{width:100%;flex-wrap:wrap}
@@ -208,3 +208,12 @@ select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .back-to-problems{display:inline-flex;min-height:44px;margin-bottom:8px;scroll-margin-top:64px}
   .problem-detail :is(.detail,.idea-title,.comment){scroll-margin-top:64px}
 }
+
+.enhancement-group{display:grid;gap:12px}
+.enhancement-group h3,.enhancement-group .empty{margin:0}
+.enhancement-group+.enhancement-group{padding-top:18px;border-top:1px solid var(--line)}
+.enhancement-resolution{padding:10px 12px;border-left:2px solid var(--line);background:var(--raised);overflow-wrap:anywhere}
+.enhancement-resolution .body{margin-block:4px}
+.workshop-footer button[aria-current=page]{color:var(--ink);background:var(--raised);border-color:var(--accent)}
+.section-intro .task-help{margin-top:6px}
+.task-help-icon{display:inline-flex;align-items:center;vertical-align:text-bottom;color:var(--accent)}

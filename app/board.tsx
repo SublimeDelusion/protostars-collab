@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { compareTaskRank, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
+import { compareTaskRank, enhancementOutcomes, enhancementOutcomeLabels, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
 import { publishedAt } from "../lib/release";
 import { displayNameKey } from "../lib/board-cookies";
@@ -36,7 +36,7 @@ const boardSections = {
 const mainSections = ["inspiration", "problem", "todo", "activity"] as const;
 const mobileLayout = "(max-width: 740px)";
 
-type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean };
+type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean; closeEnhancement?: boolean };
 type TouchDrag = {
   pointerId: number;
   taskId: string;
@@ -242,18 +242,25 @@ export default function Board({
     setProblemDetailOpen(true);
   }
 
-  function open(next: Draft) { setError(""); setNameDraft(""); setDraft(next); }
+  function open(next: Draft) { setError(""); setNameDraft(next.identity ? name : ""); setDraft(next); }
   function edit(entry: Entry) { open({ kind: entry.kind, edit: entry }); }
   async function useName(author: string, confirmExisting: boolean) {
     if (saving) return;
     setSaving(true); setError("");
     try {
-      const res = await request("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "set-display-name", author, confirmExisting }) });
+      const renaming = Boolean(name && draft?.identity);
+      const res = await request("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: renaming ? "rename-display-name" : "set-display-name", author, confirmExisting }) });
       if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not set your name. Please try again.");
       const data = await res.json() as { displayName: string; ownCommentIds: string[] };
       boardRevision.current++;
       setName(data.displayName);
       setOwnCommentIds(data.ownCommentIds);
+      if (renaming) {
+        const wasMine = (value: string) => displayNameKey(value) === displayNameKey(name);
+        setEntries(items => items.map(entry => !entry.source && wasMine(entry.author) ? { ...entry, author: data.displayName } : entry));
+        setTodos(items => items.map(todo => todo.assignee && wasMine(todo.assignee) ? { ...todo, assignee: data.displayName } : todo));
+        setKnownNames(names => [...names.filter(candidate => !wasMine(candidate)), data.displayName].sort((a, b) => a.localeCompare(b)));
+      }
       if (draft?.identity) setDraft(undefined);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not set your name. Please try again."); }
     finally { setSaving(false); }
@@ -264,10 +271,10 @@ export default function Board({
     const data = new FormData(event.currentTarget);
     const author = String(data.get("author") ?? "").trim();
     if (draft.identity) { await useName(author, false); return; }
-    await saveContribution(draft, { title: data.get("title"), body: data.get("body"), severity: data.get("severity") ?? undefined }, author);
+    await saveContribution(draft, { title: data.get("title"), body: data.get("body"), severity: data.get("severity") ?? undefined, outcome: data.get("outcome") ?? undefined }, author);
   }
 
-  async function saveContribution(next: Draft, fields: { title?: FormDataEntryValue | null; body?: FormDataEntryValue | null; severity?: FormDataEntryValue } = {}, author = "") {
+  async function saveContribution(next: Draft, fields: { title?: FormDataEntryValue | null; body?: FormDataEntryValue | null; severity?: FormDataEntryValue; outcome?: FormDataEntryValue } = {}, author = "") {
     if (saving) return;
     setSaving(true); setError("");
     try {
@@ -297,6 +304,7 @@ export default function Board({
       }
       if (entry.kind === "inspiration" || entry.kind === "enhancement") { setTab(entry.kind); setSearch(""); }
       if (entry.kind === "idea") setExpanded(ids => [...ids, entry.id]);
+      if (next.closeEnhancement) setJump("entry-" + entry.parent);
       setDraft(undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save. Please try again.";
@@ -389,10 +397,15 @@ export default function Board({
   const inspirations = entries.filter(e => e.kind === "inspiration");
   const childrenOf = (id: string) => ideas.filter(e => e.parent === id);
   const matches = (e: Entry) => (e.title + " " + e.body).toLowerCase().includes(search.trim().toLowerCase());
-  const enhancementRequests = entries.filter(e => e.kind === "enhancement" && matches(e));
   const visible = (e: Entry) => matches(e) || childrenOf(e.id).some(matches);
   const resolutions = new Map(entries.filter(e => e.kind === "resolution" && e.active).map(e => [e.parent, e]));
   const shown = problems.filter(visible).sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
+  const enhancementRequests = tab === "enhancement" ? entries.filter(e => e.kind === "enhancement" && matches(e)).map(entry => {
+    const activity = entries.filter(item => item.parent === entry.id);
+    const resolution = resolutions.get(entry.id);
+    const outcome = enhancementOutcomes.find(value => value === resolution?.title);
+    return { entry, votes: activity.filter(item => item.starred), comments: activity.filter(item => item.kind === "comment"), resolution, outcome };
+  }).sort((a, b) => b.votes.length - a.votes.length || a.entry.title.localeCompare(b.entry.title, undefined, { sensitivity: "base" })) : [];
   const activeProblems = shown.filter(p => !resolutions.has(p.id)).sort((a, b) => severities.indexOf(a.severity ?? "medium") - severities.indexOf(b.severity ?? "medium"));
   const solvedProblems = shown.filter(p => resolutions.has(p.id));
   const current = shown.find(p => p.id === selected) ?? activeProblems[0] ?? solvedProblems[0];
@@ -718,7 +731,7 @@ export default function Board({
       </button>
       <div className="workshop-menu" id="workshop-menu">
       <nav className="tabs mobile-nav" aria-label="Workshop sections">{navigationButtons(true)}</nav>
-      <div className="tools header-tools">{!name && <button className="quiet" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>Set display name</button>}
+      <div className="tools header-tools"><button className="quiet" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>{name ? "Change display name" : "Set display name"}</button>
       <button className="quiet header-share" aria-label="Copy team invite link" title="Copy team invite link" onClick={() => { setMenuOpen(false); void copyInvite(); }} disabled={!ready || copying}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
           <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
@@ -752,6 +765,7 @@ export default function Board({
         <header className="section-intro">
           <h2 id="board-section-title" tabIndex={-1}>{section.title}</h2>
           <p>{section.description}</p>
+          {tab === "todo" && <p className="task-help">To add a task, click <span className="task-help-icon"><ChecklistIcon /></span> <strong>Add task</strong> on any idea.</p>}
         </header>
 
         {tab === "problem" ? <div className="board">
@@ -809,22 +823,31 @@ export default function Board({
           </article>)}</div>
           {!inspirations.some(visible) && <p className="empty">No matching inspiration.</p>}
         </div> : tab === "enhancement" ? <div className="enhancements">
-          {enhancementRequests.map(entry => {
-            const activity = entries.filter(item => item.parent === entry.id);
-            return <article className="detail enhancement-card" key={entry.id} id={`entry-${entry.id}`} tabIndex={-1} aria-labelledby={`request-${entry.id}`}>
-              <div className="enhancement-heading">
-                <div className="editable-entry">
-                  <h3 id={`request-${entry.id}`}>{entry.title}</h3>
-                  <p className="body">{entry.body}</p>
-                  <EntrySource entry={entry} />
-                  <EditButton entry={entry} disabled={!ready} onClick={() => edit(entry)} />
+          {[false, true].map(closed => {
+            const group = enhancementRequests.filter(request => Boolean(request.outcome) === closed);
+            const heading = closed ? "Closed enhancements" : "Active enhancements";
+            return <section className="enhancement-group" key={heading}>
+              <h3>{heading}</h3>
+              {group.map(({ entry, votes, comments, resolution, outcome }) => <article className="detail enhancement-card" key={entry.id} id={`entry-${entry.id}`} tabIndex={-1} aria-labelledby={`request-${entry.id}`}>
+                <div className="enhancement-heading">
+                  <div className="editable-entry">
+                    <h4 id={`request-${entry.id}`}>{entry.title}</h4>
+                    <p className="body">{entry.body}</p>
+                    <EntrySource entry={entry} />
+                    <EditButton entry={entry} disabled={!ready} onClick={() => edit(entry)} />
+                  </div>
+                  {starButton(entry, votes)}
                 </div>
-                {starButton(entry, activity.filter(item => item.starred))}
-              </div>
-              {discussion(entry, activity.filter(item => item.kind === "comment"))}
-            </article>;
+                {outcome && resolution ? <div className="enhancement-resolution">
+                  <strong>{enhancementOutcomeLabels[outcome]}</strong>
+                  {resolution.body && <p className="body">{resolution.body}</p>}
+                  <p className="meta">Closed by {resolution.author}</p>
+                </div> : <button type="button" className="quiet small" disabled={!ready || saving} onClick={() => open({ kind: "resolution", parent: entry.id, context: entry.title, closeEnhancement: true })}>Close request</button>}
+                {discussion(entry, comments)}
+              </article>)}
+              {!group.length && <p className="empty">{search.trim() ? "No matching requests." : closed ? "No closed enhancements yet." : "No active enhancements yet."}</p>}
+            </section>;
           })}
-          {!enhancementRequests.length && <p className="empty">{search.trim() ? "No matching requests." : "No enhancement requests yet."}</p>}
         </div> : tab === "activity" ? (
           recentActivity.length ? <ol className="activity-feed">
             {recentActivity.map(({ target, latest, comments }) => <li className="detail activity-item" key={target.id}>
@@ -930,7 +953,7 @@ export default function Board({
           <div>{team ? `Team ${team.number} ${team.name}` : "Team 17097 Protostars"}</div>
           <div>Last updated <time dateTime={publishedAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/Denver" }).format(new Date(publishedAt))}</time></div>
         </div>
-        <button type="button" className="quiet small" aria-pressed={tab === "enhancement"} onClick={() => {
+        <button type="button" className="quiet small" aria-current={tab === "enhancement" ? "page" : undefined} onClick={() => {
           navigate("enhancement", true);
         }}>App enhancements</button>
       </footer>
@@ -963,25 +986,26 @@ export default function Board({
           <button className="quiet danger" disabled={saving || confirmation !== "delete"}>{saving ? "Deleting…" : "Delete " + labels[draft.kind]}</button>
         </div>
       </form> : draft && <form key={draft.edit?.id ?? draft.kind + (draft.parent ?? "")} onSubmit={submit}>
-        <div className="dialog-head"><h2 id="entry-dialog-title">{draft.identity ? "Set display name" : draft.starred ? "Star this idea" : draft.kind === "vote" ? "Add a star" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>
+        <div className="dialog-head"><h2 id="entry-dialog-title">{draft.identity ? name ? "Change display name" : "Set display name" : draft.closeEnhancement ? "Close enhancement request" : draft.starred ? "Star this idea" : draft.kind === "vote" ? "Add a star" : actionTitles[draft.kind] ?? (draft.edit ? "Edit " : "Add ") + labels[draft.kind]}</h2><button type="button" className="quiet" aria-label="Close" disabled={saving} onClick={() => setDraft(undefined)}>×</button></div>
         {draft.context && <p className="meta">{draft.context}</p>}
-        {!draft.edit && (name ? <p className="meta">Posting as {name}</p> : <>
+        {!draft.edit && (name && !draft.identity ? <p className="meta">Posting as {name}</p> : <>
           <label>What should we call you?<input name="author" maxLength={50} required autoComplete="nickname" placeholder="First name or nickname" value={nameDraft} onChange={e => setNameDraft(e.target.value)} /></label>
-          {suggestions.length > 0 && <div className="name-suggestions" aria-label="Existing team names">{suggestions.map(candidate =>
+          {!name && suggestions.length > 0 && <div className="name-suggestions" aria-label="Existing team names">{suggestions.map(candidate =>
             <div key={candidate}><span>Are you {candidate} on a different device?</span><button type="button" className="quiet small" disabled={saving} onClick={() => void useName(candidate, true)}>Yes, I’m {candidate}</button></div>
           )}</div>}
         </>)}
         {!draft.identity && draft.kind !== "vote" && <>
           {!untitled(draft.kind) && <label>Title<input name="title" required maxLength={120} defaultValue={draft.edit?.title} /></label>}
           {draft.kind === "problem" && <label>Severity<select name="severity" defaultValue={draft.edit?.severity ?? "medium"}>{severities.map(severity => <option key={severity} value={severity}>{severityLabels[severity]}</option>)}</select></label>}
-          <label>{draft.starred ? "Why are you starring this idea?" : actionNotes[draft.kind] ?? (draft.kind === "comment" ? "Comment" : "Description")}<textarea name="body" rows={5} required maxLength={3000} defaultValue={draft.edit?.body} /></label>
+          {draft.closeEnhancement && <label>Outcome<select name="outcome" defaultValue="" required><option value="" disabled>Choose an outcome</option>{enhancementOutcomes.map(outcome => <option key={outcome} value={outcome}>{enhancementOutcomeLabels[outcome]}</option>)}</select></label>}
+          <label>{draft.closeEnhancement ? "Resolution note (optional)" : draft.starred ? "Why are you starring this idea?" : actionNotes[draft.kind] ?? (draft.kind === "comment" ? "Comment" : "Description")}<textarea name="body" rows={5} required={!draft.closeEnhancement} maxLength={3000} defaultValue={draft.edit?.body} /></label>
         </>}
         {error && <p className="notice" role="alert">{error}</p>}
         <div className="dialog-actions">{draft.edit && <button type="button" className="quiet danger delete-entry" disabled={saving} onClick={() => {
           setConfirmation("");
           setError("");
           setDraft({ ...draft, deleting: true });
-        }}>Delete</button>}<button type="button" className="quiet" onClick={() => setDraft(undefined)} disabled={saving}>Cancel</button><button className="primary" disabled={saving || (!name && exactName && !draft.edit)}>{saving ? "Saving…" : draft.identity ? "Set name" : draft.edit ? "Save changes" : draft.starred ? "Post comment and star" : actionSaves[draft.kind] ?? (draft.kind === "comment" ? "Post comment" : "Save " + draft.kind)}</button></div>
+        }}>Delete</button>}<button type="button" className="quiet" onClick={() => setDraft(undefined)} disabled={saving}>Cancel</button><button className="primary" disabled={saving || (!name && exactName && !draft.edit)}>{saving ? "Saving…" : draft.identity ? "Save name" : draft.closeEnhancement ? "Close request" : draft.edit ? "Save changes" : draft.starred ? "Post comment and star" : actionSaves[draft.kind] ?? (draft.kind === "comment" ? "Post comment" : "Save " + draft.kind)}</button></div>
       </form>}
     </dialog>
   </>;
