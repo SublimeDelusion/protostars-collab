@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
+import { compareTaskRank, severities, taskStatus, taskStatuses, taskStatusLabels, withoutEntryBranches, type TaskStatus, type Entry, type Kind, type Severity, type TeamInfo, type Todo } from "../lib/board";
 
+import { publishedAt } from "../lib/release";
 import { displayNameKey } from "../lib/board-cookies";
 
 const boardSections = {
@@ -79,6 +80,9 @@ export default function Board({
   const [tab, setTab] = useState<keyof typeof boardSections>("inspiration");
   const section = boardSections[tab];
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [swimlanes, setSwimlanes] = useState(false);
+  const [draggedTask, setDraggedTask] = useState<string>();
+  const [problemEdit, setProblemEdit] = useState<{ id: string; field: "title" | "body" }>();
   const [pendingTodo, setPendingTodo] = useState<string>();
   const [assignment, setAssignment] = useState<{ idea: Entry; todo?: Todo }>();
   const [assignmentError, setAssignmentError] = useState("");
@@ -268,7 +272,7 @@ export default function Board({
     } catch { setNotice("Couldn't download the shared board. Please try again."); }
   }
 
-  async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-status"; status: TaskStatus }) {
+  async function saveTodo(id: string, change: { action: "add-todo" | "set-todo-assignee"; assignee: string | null } | { action: "set-todo-status"; status: TaskStatus } | { action: "move-todo"; status: TaskStatus; before?: string }) {
     if (pendingTodo) return;
     setPendingTodo(id);
     setNotice("");
@@ -278,13 +282,13 @@ export default function Board({
         body: JSON.stringify({ id, ...change }),
       });
       if (!response.ok) throw new Error(response.status < 500 ? (await response.json() as { error: string }).error : "Could not save the to-do.");
-      const { todo } = await response.json() as { todo: Todo };
+      const result = await response.json() as { todo: Todo } | { tasks: Todo[] };
       boardRevision.current++;
-      setTodos(items => items.some(item => item.ideaId === id) ? items.map(item => item.ideaId === id ? todo : item) : [...items, todo]);
-      if (change.action !== "set-todo-status") setAssignment(undefined);
+      setTodos(items => [...new Map([...items, ...("tasks" in result ? result.tasks : [result.todo])].map(item => [item.ideaId, item])).values()]);
+      if ("assignee" in change) setAssignment(undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save the to-do.";
-      if (change.action === "set-todo-status") setNotice(message);
+      if ("status" in change) setNotice(message);
       else setAssignmentError(message);
     } finally { setPendingTodo(undefined); }
   }
@@ -308,6 +312,62 @@ export default function Board({
     const parent = idea?.parent ? lookup.get(idea.parent) : undefined;
     return idea && parent && (idea.kind === "idea") && (matches(idea) || matches(parent)) ? [{ todo, idea, parent }] : [];
   });
+
+  const lanes = swimlanes ? [...new Set([...knownNames, ...todos.map(todo => todo.assignee || "")])]
+    .sort((a, b) => a ? b ? a.localeCompare(b) : -1 : 1) : [""];
+  if (!lanes.length) lanes.push("");
+
+  async function saveProblemField(problem: Entry, field: "title" | "body" | "severity", value: string) {
+    if (saving) return;
+    setSaving(true);
+    setNotice("");
+    try {
+      const res = await request("/api/board", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "edit-problem", id: problem.id, field, value }),
+      });
+      if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not save the problem.");
+      const { entry } = await res.json() as { entry: Entry };
+      boardRevision.current++;
+      setEntries(items => update(items, [entry]));
+      setProblemEdit(undefined);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not save the problem.");
+    } finally { setSaving(false); }
+  }
+
+  function problemField(problem: Entry, field: "title" | "body") {
+    const editing = problemEdit?.id === problem.id && problemEdit.field === field;
+    const label = field === "title" ? "title" : "description";
+    if (editing) return <form className="inline-problem-form" onSubmit={event => {
+      event.preventDefault();
+      void saveProblemField(problem, field, String(new FormData(event.currentTarget).get("value") ?? ""));
+    }}>
+      {field === "title" ? <input aria-label="Problem title" name="value" defaultValue={problem.title} maxLength={120} required autoFocus /> :
+        <textarea aria-label="Problem description" name="value" defaultValue={problem.body} rows={4} maxLength={3000} required autoFocus />}
+      <div className="inline-actions">
+        {field === "title" && <button type="button" className="quiet small danger" disabled={saving} onClick={() => {
+          setConfirmation("");
+          setProblemEdit(undefined);
+          open({ kind: "problem", edit: problem, deleting: true });
+        }}>Delete problem</button>}
+        <button type="button" className="quiet small" disabled={saving} onClick={() => setProblemEdit(undefined)}>Cancel</button>
+        <button className="primary small" disabled={saving}>Save {label}</button>
+      </div>
+    </form>;
+    return <div className="editable-entry inline-problem-field">
+      <EditButton entry={problem} label={`Edit problem ${label}`} disabled={!ready || saving}
+        onClick={() => setProblemEdit({ id: problem.id, field })} />
+      {field === "title" ? <h3>{problem.title}</h3> : <p className="body">{problem.body}</p>}
+    </div>;
+  }
+
+  function dropTask(status: TaskStatus, lane: string, before?: string) {
+    const task = draggedTask && todoByIdea.get(draggedTask);
+    setDraggedTask(undefined);
+    if (!task || task.ideaId === before || (swimlanes && (task.assignee || "") !== lane)) return;
+    void saveTodo(task.ideaId, { action: "move-todo", status, before });
+  }
 
   function showIdea(idea: Entry, parent: Entry) {
     setSearch("");
@@ -451,21 +511,23 @@ export default function Board({
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="toolbar" aria-label="Workshop navigation">
         <div className="tabs">
-          {(Object.keys(boardSections) as (keyof typeof boardSections)[]).map(key => <button key={key}
-            className={`${tab === key ? "active" : ""}${key === "enhancement" ? " enhancement-tab" : ""}`} aria-pressed={tab === key}
+          {(["inspiration", "problem", "todo"] as const).map(key => <button key={key}
+            className={tab === key ? "active" : ""} aria-pressed={tab === key}
             onClick={() => { setTab(key); setSearch(""); }}>{boardSections[key].title}</button>)}
         </div>
 
+        <div className="tools">
+          <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
+          {tab === "todo" && <button className="quiet" aria-pressed={swimlanes} onClick={() => setSwimlanes(active => !active)}>By assignee</button>}
+          {tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
+        </div>
       </section>
       <section aria-labelledby="board-section-title">
         <header className="section-intro">
           <h2 id="board-section-title">{section.title}</h2>
           <p>{section.description}</p>
         </header>
-        <div className="tools section-tools">
-          <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
-          {tab !== "todo" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
-        </div>
+
         {tab === "problem" ? <div className="board">
           <aside className="problem-list" aria-label="Problems">
             <div className="eyebrow">ACTIVE PROBLEMS <span>{activeProblems.length}</span></div>
@@ -477,18 +539,29 @@ export default function Board({
             {!solvedProblems.length && <p className="empty">No solved problems{search ? " match" : " yet"}.</p>}
           </aside>
           {current && <section className="detail" aria-label="Selected problem">
-            <div className="editable-entry">
-              <div className="problem-meta"><span className="eyebrow">PROBLEM</span><ProblemStatus status={resolution ? "resolved" : current.severity ?? "medium"} full /></div><h3>{current.title}</h3><p className="body">{current.body}</p>
-              <EditButton entry={current} disabled={!ready} onClick={() => edit(current)} />
+            <div className="problem-card-toolbar">
+              <span className="eyebrow">PROBLEM</span>
+              <label className="severity-control">
+                <ProblemStatus status={resolution ? "resolved" : current.severity ?? "medium"} full />
+                <span aria-hidden="true" className="severity-caret">⌄</span>
+                <select aria-label="Problem severity or status" disabled={!ready || saving}
+                  value={resolution ? "resolved" : current.severity ?? "medium"} onChange={event => {
+                    const value = event.currentTarget.value;
+                    if (value === "close") open({ kind: "resolution", parent: current.id, context: current.title });
+                    else if (value === "reopen") void reopen(current);
+                    else void saveProblemField(current, "severity", value);
+                  }}>
+                  {resolution && <option value="resolved" disabled>Solved</option>}
+                  {severities.map(severity => <option key={severity} value={severity} disabled={Boolean(resolution)}>{severityLabels[severity]}</option>)}
+                  {resolution ? <option value="reopen" disabled={!name}>Reopen problem</option> : <option value="close">Close problem…</option>}
+                </select>
+              </label>
             </div>
-            <div className="problem-actions">
-              <EntrySource entry={current} />
-              {!resolution && <button className="quiet small close-problem" disabled={!ready || saving} onClick={() => open({
-                kind: "resolution", parent: current.id, context: current.title,
-              })}>Close problem</button>}
-            </div>
+            {problemField(current, "title")}
+            {problemField(current, "body")}
+            <EntrySource entry={current} />
             {resolution && <section className="resolution-panel" aria-label="Resolution">
-              <div className="discussion-head"><h4>Resolution</h4><button className="quiet small" disabled={!ready || saving || !name} onClick={() => void reopen(current)}>Reopen problem</button></div>
+              <div className="discussion-head"><h4>Resolution</h4></div>
               <p className="body">{resolution.body}</p><p className="meta">Resolved by {resolution.author}</p>
             </section>}
             {ideaCards(current)}
@@ -517,19 +590,48 @@ export default function Board({
             </article>;
           })}
           {!enhancementRequests.length && <p className="empty">{search.trim() ? "No matching requests." : "No enhancement requests yet."}</p>}
-        </div> : <div className="kanban">
+        </div> : <div className="kanban-lanes">{lanes.map((lane, laneIndex) => <div className="kanban-lane" key={lane}>
+          {swimlanes && <h3>{lane || "Unassigned"}</h3>}
+          <div className="kanban">
           {taskStatuses.map(status => {
-            const items = todoRows.filter(row => taskStatus(row.todo) === status);
-            return <section className="kanban-column" key={status} aria-labelledby={`tasks-${status}`}>
-              <h3 id={`tasks-${status}`}>{taskStatusLabels[status]} <small className="meta">{items.length}</small></h3>
+            const items = todoRows.filter(row => taskStatus(row.todo) === status && (!swimlanes || (row.todo.assignee || "") === lane)).sort((a, b) => compareTaskRank(a.todo, b.todo));
+            const canDrop = Boolean(draggedTask && (!swimlanes || (todoByIdea.get(draggedTask)?.assignee || "") === lane));
+            return <section className={`kanban-column${canDrop ? " drop-ready" : ""}`} key={status} aria-labelledby={`tasks-${laneIndex}-${status}`}
+              onDragOver={event => { if (canDrop) event.preventDefault(); }}
+              onDrop={event => { if (canDrop) { event.preventDefault(); dropTask(status, lane); } }}>
+
+              <h3 id={`tasks-${laneIndex}-${status}`}>{taskStatusLabels[status]} <small className="meta">{items.length}</small></h3>
               {!items.length && <p className="meta">{search.trim() ? "No matching tasks." : "No tasks here yet."}</p>}
-              {items.map(({ idea, parent, todo }) => <article className="kanban-card" key={idea.id}>
+              {items.map(({ idea, parent, todo }, index) => <article className="kanban-card" key={idea.id}
+                draggable={ready && !pendingTodo}
+                onDragStart={event => {
+                  event.dataTransfer.setData("text/plain", idea.title);
+                  event.dataTransfer.effectAllowed = "move";
+                  setDraggedTask(idea.id);
+                }}
+                onDragEnd={() => setDraggedTask(undefined)}
+                onDrop={event => {
+                  if (!canDrop) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  const before = event.clientY < bounds.top + bounds.height / 2 ? idea.id : items[index + 1]?.idea.id;
+                  dropTask(status, lane, before);
+                }}>
                 <button type="button" className="todo-link" onClick={() => showIdea(idea, parent)}>{idea.title}</button>
                 <p className="meta">{parent.title}</p>
                 <div className="kanban-actions">
                   <div className="todo-assignee editable-entry">
                     <span>{todo.assignee || "Unassigned"}</span>
                     <EditButton entry={idea} label={`Edit assignee for ${idea.title}`} disabled={!ready || Boolean(pendingTodo)} onClick={() => openAssignment(idea, todo)} />
+                  </div>
+                  <div className="task-rank">
+                    <button type="button" className="quiet small" aria-label={`Move ${idea.title} up`}
+                      disabled={!ready || Boolean(pendingTodo) || index === 0}
+                      onClick={() => void saveTodo(idea.id, { action: "move-todo", status, before: items[index - 1]?.idea.id })}>↑</button>
+                    <button type="button" className="quiet small" aria-label={`Move ${idea.title} down`}
+                      disabled={!ready || Boolean(pendingTodo) || index === items.length - 1}
+                      onClick={() => void saveTodo(idea.id, { action: "move-todo", status, before: items[index + 2]?.idea.id })}>↓</button>
                   </div>
                   <select aria-label={`Status for ${idea.title}`} value={status} disabled={!ready || Boolean(pendingTodo)}
                     onChange={event => void saveTodo(idea.id, { action: "set-todo-status", status: event.currentTarget.value as TaskStatus })}>
@@ -539,9 +641,20 @@ export default function Board({
               </article>)}
             </section>;
           })}
-        </div>}
+          </div>
+        </div>)}</div>}
       </section>
-      <footer>{team ? team.name + " · Team " + team.number : "FTC Workshop"}</footer>
+      <footer className="workshop-footer">
+        <div>
+          <div>{team ? `Team ${team.number} ${team.name}` : "Team 17097 Protostars"}</div>
+          <div>Last updated <time dateTime={publishedAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/Denver" }).format(new Date(publishedAt))}</time></div>
+        </div>
+        <button type="button" className="quiet small" aria-pressed={tab === "enhancement"} onClick={() => {
+          setTab("enhancement");
+          setSearch("");
+          document.querySelector(".toolbar")?.scrollIntoView({ block: "start" });
+        }}>App enhancements</button>
+      </footer>
     </main>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>
       {assignment && <form onSubmit={event => {

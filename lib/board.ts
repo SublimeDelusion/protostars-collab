@@ -2,7 +2,7 @@ export const severities = ["high", "medium", "low"] as const;
 export type Severity = typeof severities[number];
 export type Kind = "problem" | "idea" | "inspiration" | "enhancement" | "comment" | "test" | "vote" | "resolution" | "completion";
 export type Entry = { id: string; kind: Kind; parent: string | null; title: string; body: string; author: string; source?: string; created: string; starred?: boolean; active?: boolean; severity?: Severity };
-export type Todo = { ideaId: string; done: boolean; inProgress?: boolean; created: string; assignee?: string | null };
+export type Todo = { ideaId: string; done: boolean; inProgress?: boolean; rank?: number | null; created: string; assignee?: string | null };
 export type TeamInfo = { number: string; name: string; logo: string };
 
 export function withoutEntryBranches<T extends { id: string; parent: string | null }>(entries: T[], removedIds: Iterable<string>) {
@@ -32,4 +32,9 @@ export const taskStatusLabels: Record<TaskStatus, string> = {
 export function taskStatus(todo: Todo): TaskStatus {
   if (todo.done) return "done";
   return todo.inProgress ? "in-progress" : "todo";
+}
+
+export function compareTaskRank(a: Todo, b: Todo) {
+  return (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)
+    || a.created.localeCompare(b.created) || a.ideaId.localeCompare(b.ideaId);
 }

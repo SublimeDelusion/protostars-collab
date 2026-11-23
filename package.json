@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "build": "esbuild pages-client/main.tsx --bundle --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=docs/board.js && cp pages-client/index.html docs/index.html"
+    "build": "esbuild pages-client/main.tsx --bundle --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" \"--define:__WORKSHOP_PUBLISHED_AT__=\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\"\" --outfile=docs/board.js && cp pages-client/index.html docs/index.html"
   },
   "dependencies": {
     "react": "19.2.6",
