@@ -1,25 +1,20 @@
 import handler from "vinext/server/fetch-handler";
-import { BOARD_COOKIE, NAME_COOKIE, boardCookie, readCookie } from "../lib/board-cookies";
-import { PAGES_ORIGIN, INVITE_HEADER, NAME_HEADER, CLAIM_HEADER, SESSION_HEADER, workshopInviteLink } from "../lib/pages-origin";
-import { DEFAULT_TEAM, TEAM_HEADER, TEAM_NAME_HEADER, teams } from "../lib/teams";
-import { claimTeamInvite, findBoardAccess, newBoardToken, issueMagicLink, resumeBoardSession, startBoardSession } from "../lib/team-invites";
+import { BOARD_COOKIE, NAME_COOKIE, readCookie } from "../lib/board-cookies";
+import { PAGES_ORIGIN, INVITE_HEADER, NAME_HEADER, CLAIM_HEADER, SESSION_HEADER } from "../lib/pages-origin";
+import { DEFAULT_TEAM, TEAM_HEADER, TEAM_NAME_HEADER } from "../lib/teams";
+import { registeredTeam } from "../lib/team-invites";
+import { browserAccess, teamAccessApi } from "./team-access";
+import { drizzle } from "drizzle-orm/d1";
 import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
 const worker = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
     const url = new URL(request.url);
-    const bindings = env as unknown as Record<string, unknown>;
     const linkHeaders = { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" };
-    if (env.DB && request.method === "GET" && url.pathname.startsWith("/join/")) {
-      const token = url.pathname.slice(6);
-      const access = await findBoardAccess(env.DB, bindings, token);
-      const session = newBoardToken();
-      if (access && access.kind !== "session" && await startBoardSession(env.DB, access.team.number, access.kind, token, session)) {
-        return new Response(null, { status: 303, headers: { ...linkHeaders, Location: "/", "Set-Cookie": boardCookie(BOARD_COOKIE, session) } });
-      }
-    }
-    const fromPages = url.pathname === "/api/board" && request.headers.get("Origin") === PAGES_ORIGIN;
+    const boardApi = url.pathname === "/api/board";
+    const teamApi = url.pathname === "/api/team";
+    const fromPages = (boardApi || teamApi) && request.headers.get("Origin") === PAGES_ORIGIN;
     const cors = {
       "Access-Control-Allow-Origin": PAGES_ORIGIN,
       "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
@@ -27,50 +22,62 @@ const worker = {
       "Access-Control-Expose-Headers": `${NAME_HEADER}, ${SESSION_HEADER}`,
       "Vary": "Origin",
     };
+    const responseHeaders = { ...linkHeaders, ...(fromPages ? cors : {}) };
+    const finish = (response: Response) => {
+      const headers = new Headers(response.headers);
+      for (const [name, value] of Object.entries(responseHeaders)) headers.set(name, value);
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    };
     if (fromPages && request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    if (url.pathname.startsWith("/join/") && request.method === "GET") {
+      return new Response(null, { status: 303, headers: { ...linkHeaders, Location: "/" } });
+    }
+    if ((boardApi || teamApi) && !["GET", "HEAD"].includes(request.method) &&
+      !fromPages && request.headers.get("Origin") !== url.origin) {
+      return finish(Response.json({ error: "Origin does not match." }, { status: 403 }));
+    }
     const token = (fromPages ? request.headers.get(INVITE_HEADER) : readCookie(request, BOARD_COOKIE)) ?? "";
-    if (request.method === "POST" && fromPages && url.searchParams.get("join") === "team") {
-      const claim = env.DB && await claimTeamInvite(env.DB, token, request.headers.get(CLAIM_HEADER) ?? "");
-      const headers = { ...linkHeaders, ...cors };
-      return claim ? Response.json(claim, { headers })
-        : Response.json({ error: "This invite is invalid or has already been used. Ask the team for a teammate link." }, { status: 404, headers });
+    let rememberedName = "";
+    if (fromPages) {
+      try { rememberedName = decodeURIComponent(request.headers.get(NAME_HEADER) ?? ""); } catch { /* ignore malformed legacy name */ }
+    } else {
+      rememberedName = readCookie(request, NAME_COOKIE);
     }
-    const isBoardGet = request.method === "GET" && url.pathname === "/api/board";
-    const session = isBoardGet ? fromPages ? request.headers.get(CLAIM_HEADER) ?? "" : newBoardToken() : "";
-    const access = env.DB ? await findBoardAccess(env.DB, bindings, token) : undefined;
-    const resumedTeam = env.DB && !access && session ? await resumeBoardSession(env.DB, token, session) : undefined;
-    const upgradedTeam = env.DB && access && access.kind !== "session" && session &&
-      await startBoardSession(env.DB, access.team.number, access.kind, token, session) ? access.team : undefined;
-    const sessionStarted = Boolean(resumedTeam ?? upgradedTeam);
-    const invitedTeam = resumedTeam ?? upgradedTeam ?? (access?.kind === "session" || access?.kind === "legacy" ? access.team : undefined);
-    const team = invitedTeam ?? (import.meta.env.DEV ? teams.find(item => item.number === DEFAULT_TEAM) : undefined);
-    if (url.pathname === "/api/board" && url.searchParams.get("share") === "invite") {
-      const headers = { ...linkHeaders, ...(fromPages ? cors : {}) };
-      if (!access || !env.DB) return Response.json({ error: "Open the team’s invite link first." }, { status: 404, headers });
-      if (request.method !== "POST") return Response.json({ error: "Refresh the Workshop to create a new invite link." }, { status: 405, headers });
-      if (access.kind !== "session") return Response.json({ error: "Refresh the Workshop to upgrade your session." }, { status: 409, headers });
-      if (!fromPages && request.headers.get("Origin") !== url.origin) return Response.json({ error: "Origin does not match." }, { status: 403, headers });
-      return Response.json({ url: workshopInviteLink(await issueMagicLink(env.DB, access.team.number)) }, { headers });
+    if (rememberedName.length > 50) rememberedName = "";
+    const firstAccess = env.DB && (teamApi || boardApi) ? await browserAccess(env.DB, token, fromPages ? rememberedName : "") : undefined;
+    const teamCookie = firstAccess?.teamNumber && firstAccess.teamNumber !== DEFAULT_TEAM ? NAME_COOKIE + "-" + firstAccess.teamNumber : NAME_COOKIE;
+    if (!fromPages) rememberedName = readCookie(request, teamCookie);
+    const access = !fromPages && env.DB && firstAccess?.state === "active" && !firstAccess.current && rememberedName && rememberedName.length <= 50
+      ? await browserAccess(env.DB, token, rememberedName) : firstAccess;
+    if (teamApi && env.DB && access) return finish(await teamAccessApi(request, env.DB, access, fromPages));
+    if (boardApi && access?.state !== "active") {
+      return finish(Response.json({ state: access?.state ?? "guest", error: "Request access to your team’s Workshop." },
+        { status: access?.state === "suspended" ? 423 : 401 }));
     }
-    const logo = request.method === "GET" && teams.some(item => item.logo === url.pathname);
-    if (!team && !logo) {
-      return new Response("Open the team’s invite link to access the board.", { status: 404, headers: { ...linkHeaders, ...(fromPages ? cors : {}), "Content-Type": "text/plain; charset=utf-8" } });
+    if (boardApi && url.searchParams.get("share") === "invite") {
+      return finish(Response.json({ error: "Use the Team tab to invite a teammate." }, { status: 410 }));
     }
+    const team = env.DB && access?.teamNumber && access.state === "active"
+      ? await registeredTeam(drizzle(env.DB), access.teamNumber) : undefined;
+    if (boardApi && !team) return finish(Response.json({ error: "This team is unavailable." }, { status: 404 }));
+    if (teamApi && !env.DB) return finish(Response.json({ error: "Workshop database unavailable." }, { status: 503 }));
     const headers = new Headers(request.headers);
     headers.delete(TEAM_HEADER);
     headers.delete(TEAM_NAME_HEADER);
+    headers.delete("X-Board-Member-Internal");
     headers.delete(INVITE_HEADER);
     headers.delete(NAME_HEADER);
     headers.delete(CLAIM_HEADER);
     if (team) {
       headers.set(TEAM_HEADER, team.number);
       headers.set(TEAM_NAME_HEADER, encodeURIComponent(team.name));
-    }
-    const teamCookie = team && team.number !== DEFAULT_TEAM ? NAME_COOKIE + "-" + team.number : NAME_COOKIE;
-    if (fromPages || teamCookie !== NAME_COOKIE) {
-      const name = fromPages ? request.headers.get(NAME_HEADER) ?? "" : encodeURIComponent(readCookie(request, teamCookie));
       headers.delete("Cookie");
-      if (/^[A-Za-z0-9_.!~*'()%+-]{1,600}$/.test(name)) headers.set("Cookie", NAME_COOKIE + "=" + name);
+      if (access?.current) {
+        headers.set("X-Board-Member-Internal", access.current.id);
+        headers.set("Cookie", NAME_COOKIE + "=" + encodeURIComponent(access.current.name));
+      } else if (rememberedName && rememberedName.length <= 50) {
+        headers.set("Cookie", NAME_COOKIE + "=" + encodeURIComponent(rememberedName));
+      }
     }
     request = new Request(request, { headers });
     let binding = ctx.props?.CONNECTORS;
@@ -105,10 +112,6 @@ const worker = {
         const cookies = headers.getSetCookie();
         headers.delete("Set-Cookie");
         for (const cookie of cookies) headers.append("Set-Cookie", cookie.startsWith(NAME_COOKIE + "=") ? teamCookie + cookie.slice(NAME_COOKIE.length) : cookie);
-      }
-      if (sessionStarted && response.ok) {
-        if (fromPages) headers.set(SESSION_HEADER, "1");
-        else headers.append("Set-Cookie", boardCookie(BOARD_COOKIE, session));
       }
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     });

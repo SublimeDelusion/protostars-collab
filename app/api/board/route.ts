@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { env } from "cloudflare:workers";
-import { contributions, people, todos } from "../../../db/schema";
+import { teamMembers, contributions, people, todos } from "../../../db/schema";
 import { PAGES_ORIGIN, workshopInviteLink } from "../../../lib/pages-origin";
 import { issueTeamInvite, replaceTeamInvite } from "../../../lib/team-invites";
 import { DEFAULT_TEAM, teamFor, teamInfo, teamSeed } from "../../../lib/teams";
@@ -136,7 +136,8 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
   const oldPerson = await findPerson(db, team, oldKey);
   const registeredName = oldPerson?.name ?? await canonicalName(db, team, previous);
   if (!registeredName || oldPerson?.renamedTo) return response({ error: "Set your display name on this device first." }, 422);
-  if (key !== oldKey && (await findPerson(db, team, key) || await canonicalName(db, team, name))) {
+  if (key !== oldKey && (await findPerson(db, team, key) || await canonicalName(db, team, name) ||
+    await db.get(sql`select 1 from team_members where team = ${team} and name_key = ${key}`))) {
     return response({ error: "That name is already in use. Try a nickname." }, 409);
   }
 
@@ -159,6 +160,7 @@ async function renamePerson(db: ReturnType<typeof getDb>, team: string, previous
     ];
   const updates = [
     ...rosterChanges,
+    db.update(teamMembers).set({ nameKey: key, name }).where(and(eq(teamMembers.team, team), eq(teamMembers.nameKey, oldKey))),
     db.update(contributions).set({ starVoter: key }).where(and(eq(contributions.team, team), eq(contributions.starVoter, oldKey))),
     db.update(contributions).set({ starVoter: sharedVoteKey(team, key) }).where(and(eq(contributions.team, sharedEnhancements), eq(contributions.starVoter, sharedVoteKey(team, oldKey)))),
   ];
@@ -223,6 +225,7 @@ export async function POST(request: Request) {
       : response({ error: "This team has already joined or has no pending invitation." }, 409);
   }
   if (input.action === "invite-team") {
+    if (!request.headers.has("X-Board-Member-Internal")) return response({ error: "Set your display name first." }, 403);
     const teamNumber = trim(input.teamNumber);
     const name = trim(input.teamName);
     const message = trim(input.message);
@@ -243,6 +246,10 @@ export async function POST(request: Request) {
       const current = await currentDisplayName(db, number, displayName(request));
       if (!current) return response({ error: "Set your display name on this device first." }, 422);
       return renamePerson(db, number, current, proposed);
+    }
+    if (request.headers.has("X-Board-Member-Internal")) return response({ error: "Use Edit display name in your account menu." }, 409);
+    if (await db.get(sql`select 1 from team_members where team = ${number} and name_key = ${displayNameKey(proposed)}`)) {
+      return response({ error: "Ask an active teammate for a device invite to this account." }, 409);
     }
     if ((await findPerson(db, number, displayNameKey(proposed)))?.renamedTo) {
       return response({ error: "That name is unavailable. Choose a different display name." }, 409);

@@ -5,6 +5,9 @@ import { compareTaskRank, enhancementOutcomes, enhancementOutcomeLabels, severit
 
 import { publishedAt } from "../lib/release";
 import { displayNameKey } from "../lib/board-cookies";
+import type { TeamRoster } from "../lib/team-access";
+import TeamMembers from "./team-roster";
+import InviteSharing from "./invite-sharing";
 
 const boardSections = {
   inspiration: {
@@ -27,13 +30,14 @@ const boardSections = {
     search: "Find activity",
     description: "Follow new ideas, discussions, and changes across the Workshop.",
   },
+  team: { title: "Team", search: "", description: "Review access requests and manage teammates and devices." },
   enhancement: {
     title: "App enhancements",
     search: "Find a request",
     description: "Suggest improvements, discuss them, and star requests with other Workshop teams.",
   },
 } as const;
-const mainSections = ["inspiration", "problem", "todo", "activity"] as const;
+const mainSections = ["inspiration", "problem", "todo", "activity", "team"] as const;
 const mobileLayout = "(max-width: 740px)";
 
 type Draft = { kind: Kind; parent?: string; context?: string; edit?: Entry; deleting?: boolean; identity?: boolean; starred?: boolean; closeEnhancement?: boolean };
@@ -188,15 +192,25 @@ function HeaderDropdown({ className, label, triggerClass = "", children }: { cla
   </details>;
 }
 
+function NetworkIcon() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+    <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
+  </svg>;
+}
+
 export default function Board({
-  initialEntries, request = fetch, root = "/", assetOrigin = "", welcome = "", dismissWelcome,
-}: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string; welcome?: string; dismissWelcome?: () => void }) {
+  initialEntries, request = fetch, root = "/", assetOrigin = "", welcome = "", dismissWelcome, onAccessChange,
+}: { initialEntries: Entry[]; request?: typeof fetch; root?: string; assetOrigin?: string; welcome?: string; dismissWelcome?: () => void; onAccessChange?: () => void }) {
   const [team, setTeam] = useState<TeamInfo>();
   const [canManageTeams, setCanManageTeams] = useState(false);
   const inviteDialog = useRef<HTMLDialogElement>(null);
   const adoptionDialog = useRef<HTMLDialogElement>(null);
   const [issuedInvite, setIssuedInvite] = useState("");
-  const [teammateInvite, setTeammateInvite] = useState(false);
+  const [memberInviteTitle, setMemberInviteTitle] = useState("");
+  const [roster, setRoster] = useState<TeamRoster>();
+  const [rosterError, setRosterError] = useState("");
+  const [teamBusy, setTeamBusy] = useState(false);
+  const rosterVersion = useRef(0);
   const [inviteError, setInviteError] = useState("");
   const [issuingInvite, setIssuingInvite] = useState(false);
   const [inviteCopied, setInviteCopied] = useState(false);
@@ -252,6 +266,7 @@ export default function Board({
       const number = ++requestNumber;
       try {
         const res = await request("/api/board", { cache: "no-store" });
+        if (res.status === 401 || res.status === 423) onAccessChange?.();
         if (!res.ok) throw new Error();
         const data = await res.json() as { entries: Entry[]; displayName: string; ownCommentIds: string[]; knownNames: string[]; todos?: Todo[]; teamInfo?: TeamInfo; canManageTeams?: boolean };
         if (active && revision === boardRevision.current && number > latestResult) { latestResult = number; setTeam(data.teamInfo); setCanManageTeams(Boolean(data.canManageTeams)); setEntries(data.entries); setTodos(data.todos ?? []); setReady(true); setName(data.displayName); setOwnCommentIds(data.ownCommentIds ?? []); setKnownNames(data.knownNames ?? []); setNotice(""); }
@@ -261,7 +276,7 @@ export default function Board({
     const timer = setInterval(refresh, 12000);
     window.addEventListener("focus", refresh);
     return () => { active = false; clearInterval(timer); window.removeEventListener("focus", refresh); };
-  }, [request]);
+  }, [request, onAccessChange]);
   useEffect(() => {
     if (draft && !dialog.current?.open) dialog.current?.showModal();
     else if (!draft && dialog.current?.open) dialog.current.close();
@@ -405,25 +420,56 @@ export default function Board({
     }
   }
 
-  async function openTeammateInvite() {
-    if (issuingInvite) return;
-    setTeammateInvite(true);
-    setIssuedInvite("");
-    setInviteError("");
-    setInviteCopied(false);
-    setIssuingInvite(true);
-    setMenuOpen(false);
-    inviteDialog.current?.showModal();
+  async function refreshRoster() {
+    const version = ++rosterVersion.current;
     try {
-      const res = await request("/api/board?share=invite", { method: "POST" });
-      if (!res.ok) throw new Error(res.status < 500 ? (await res.json() as { error: string }).error : "Could not create an invite link.");
-      const { url } = await res.json() as { url: string };
-      setIssuedInvite(url);
-      requestAnimationFrame(() => inviteDialog.current?.querySelector<HTMLButtonElement>(".invite-copy")?.focus());
+      const res = await request("/api/team", { cache: "no-store" });
+      if (!res.ok) throw new Error();
+      const data = await res.json() as TeamRoster;
+      if (version === rosterVersion.current) setRoster(data);
+    } catch {
+      if (version === rosterVersion.current) setRosterError("Couldn’t load team access. Try again.");
+    }
+  }
+
+  useEffect(() => {
+    if (!ready) return;
+    void refreshRoster();
+    const timer = setInterval(() => void refreshRoster(), 10000);
+    const focus = () => void refreshRoster();
+    window.addEventListener("focus", focus);
+    return () => { clearInterval(timer); window.removeEventListener("focus", focus); rosterVersion.current++; };
+  }, [ready, name, request, tab]);
+
+  async function teamAction(action: string, fields: Record<string, unknown>, invite = false) {
+    if (teamBusy) return false;
+    setTeamBusy(true);
+    setRosterError("");
+    if (invite) {
+      setMemberInviteTitle(action === "invite-teammate" ? "Teammate invite" : "Device invite");
+      setIssuedInvite("");
+      setInviteError("");
+      setInviteCopied(false);
+      setIssuingInvite(true);
+      setMenuOpen(false);
+      inviteDialog.current?.showModal();
+    }
+    try {
+      const res = await request("/api/team", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...fields }) });
+      const result = await res.json() as { url?: string; error?: string };
+      if (!res.ok) throw new Error(result.error || "Couldn’t save the change. Try again.");
+      if (result.url) setIssuedInvite(result.url);
+      await refreshRoster();
+      return true;
     } catch (error) {
-      setInviteError(error instanceof Error ? error.message : "Could not create the invite. Try again.");
+      const message = error instanceof Error ? error.message : "Couldn’t save the change. Try again.";
+      if (invite) setInviteError(message);
+      else setRosterError(message);
+      return false;
     } finally {
-      setIssuingInvite(false);
+      setTeamBusy(false);
+      if (invite) setIssuingInvite(false);
     }
   }
 
@@ -444,7 +490,7 @@ export default function Board({
       } else {
         await navigator.clipboard.writeText(await invite);
       }
-      setTeammateInvite(false);
+      setMemberInviteTitle("");
       setIssuedInvite(await invite);
       setInviteCopied(true);
       setInviteError("");
@@ -453,7 +499,7 @@ export default function Board({
     } catch {
       try {
         setIssuedInvite(await invite);
-        setTeammateInvite(false);
+        setMemberInviteTitle("");
         setInviteError("Select the invite link below to copy it.");
         setInviteCopied(false);
         adoptionDialog.current?.close();
@@ -481,11 +527,12 @@ export default function Board({
   }
 
   function openTeamInvite() {
-    setTeammateInvite(false);
+    setMemberInviteTitle("");
     setIssuedInvite("");
     setInviteError("");
     setInviteCopied(false);
     setMenuOpen(false);
+    adoptionDialog.current?.close();
     inviteDialog.current?.showModal();
   }
 
@@ -510,6 +557,7 @@ export default function Board({
     setAdoption(undefined);
     setAdoptionError("");
     adoptionDialog.current?.showModal();
+    if (!canManageTeams) return;
     try {
       const res = await request("/api/board?report=adoption", { cache: "no-store" });
       if (!res.ok) throw new Error();
@@ -860,7 +908,9 @@ export default function Board({
   function navigationButtons(fromMenu = false) {
     return mainSections.map(key => <button type="button" key={key}
       className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined}
-      onClick={() => navigate(key, fromMenu)}>{boardSections[key].title}</button>);
+      onClick={() => navigate(key, fromMenu)}>{boardSections[key].title}
+      {key === "team" && Boolean(roster?.badge) && <span className="team-badge" aria-label={`${roster?.badge} awaiting review`}>{roster?.badge}</span>}
+    </button>);
   }
 
   return <>
@@ -875,19 +925,11 @@ export default function Board({
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
           <path d={menuOpen ? "m6 6 12 12M18 6 6 18" : "M4 6h16M4 12h16M4 18h16"} />
         </svg>
+        {Boolean(roster?.badge) && <span className="team-badge" aria-label={`${roster?.badge} awaiting review`}>{roster?.badge}</span>}
       </button>
       <div className="workshop-menu" id="workshop-menu">
       <nav className="tabs mobile-nav" aria-label="Workshop sections">{navigationButtons(true)}</nav>
       <div className="tools header-tools">
-      <HeaderDropdown className="invite-menu" triggerClass="header-share" label={<>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
-          <path d="m8.7 10.5 6.6-4m-6.6 7 6.6 4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/>
-        </svg>
-        Invite
-      </>}>
-        <button type="button" disabled={!ready || issuingInvite} onClick={() => void openTeammateInvite()}>Invite teammate</button>
-        <button type="button" disabled={!ready || issuingInvite} onClick={openTeamInvite}>Invite new team</button>
-      </HeaderDropdown>
       {name ? <HeaderDropdown className="profile-menu" label={<>
           <svg className="profile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20v-1a7 7 0 0 1 14 0v1"/></svg>
           <span className="profile-name">{name}</span>
@@ -896,6 +938,7 @@ export default function Board({
           setMenuOpen(false);
           open({kind: "comment", identity: true});
         }}>Edit display name</button>
+        <button type="button" disabled={!ready || !roster?.viewer || teamBusy} onClick={() => void teamAction("add-device", {}, true)}>Add a device</button>
       </HeaderDropdown> : <button className="quiet profile-start" disabled={!ready} onClick={() => { setMenuOpen(false); open({kind: "comment", identity: true}); }}>Set display name</button>}
       </div>
       </div>
@@ -916,11 +959,11 @@ export default function Board({
       <section className="toolbar" aria-label="Workshop controls">
         <nav className="tabs desktop-nav" aria-label="Workshop sections">{navigationButtons()}</nav>
 
-        <div className="tools">
+        {tab !== "team" && <div className="tools">
           <input type="search" placeholder={section.search} aria-label="Search current section" value={search} onChange={e => setSearch(e.target.value)} />
           {tab === "todo" && <button className="quiet assignee-toggle" aria-pressed={swimlanes} onClick={() => setSwimlanes(active => !active)}>By assignee</button>}
           {tab !== "todo" && tab !== "activity" && <button className="primary" disabled={!ready} onClick={() => open({ kind: tab })}>＋ Add {tab === "enhancement" ? "request" : labels[tab]}</button>}
-        </div>
+        </div>}
       </section>
       <section aria-labelledby="board-section-title">
         <header className="section-intro">
@@ -929,7 +972,7 @@ export default function Board({
           {tab === "todo" && <p className="task-help">To add a task, click <span className="task-help-icon"><ChecklistIcon /></span> <strong>Add task</strong> on any idea.</p>}
         </header>
 
-        {tab === "problem" ? <div className="board">
+        {tab === "team" ? <TeamMembers roster={roster} busy={teamBusy} error={rosterError} act={teamAction} /> : tab === "problem" ? <div className="board">
           <aside className="problem-list" aria-label="Problems">
             <div className="eyebrow">ACTIVE PROBLEMS <span>{activeProblems.length}</span></div>
             {problemLinks(activeProblems, false)}
@@ -1130,28 +1173,27 @@ export default function Board({
           <div>Last updated <time dateTime={publishedAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/Denver" }).format(new Date(publishedAt))}</time></div>
         </div>
         <div className="footer-actions">
-          {canManageTeams && <button type="button" className="quiet" disabled={!ready} onClick={() => void openAdoption()}>Alliances</button>}
+          <button type="button" className="quiet" disabled={!ready} onClick={() => void openAdoption()}><NetworkIcon /> Alliances</button>
           <button type="button" className="quiet" disabled={!ready} onClick={() => void download()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></svg> Download JSON</button>
           <button type="button" className="quiet" aria-current={tab === "enhancement" ? "page" : undefined} onClick={() => navigate("enhancement", true)}>App enhancements</button>
         </div>
       </footer>
     </main>
     <dialog ref={inviteDialog} aria-labelledby="team-invite-title" onCancel={event => { if (issuingInvite) event.preventDefault(); }}>
-      <h2 id="team-invite-title">{teammateInvite ? "One-time invite link" : issuedInvite ? "Team invite ready" : "Invite new team"}</h2>
+      <h2 id="team-invite-title">{memberInviteTitle || (issuedInvite ? "Team invite ready" : "Invite a new team")}</h2>
       {issuedInvite ? <>
-        {!teammateInvite && <p>Send this link to the team you’re inviting so they can claim their Workshop board.</p>}
-        <label>{teammateInvite ? "Link" : "Invite link"}<input readOnly value={issuedInvite} onFocus={event => event.currentTarget.select()} /></label>
+        <p>{memberInviteTitle === "Device invite" ? "Open this link on the device you want to add. It works once and expires in 30 minutes."
+          : memberInviteTitle ? "Share this link with the teammate you named. It expires in seven days."
+          : "Send this link to the team you’re inviting so they can claim their Workshop board."}</p>
+        <InviteSharing key={issuedInvite} url={issuedInvite} copied={inviteCopied} onCopy={async () => {
+          setInviteError("");
+          try { await navigator.clipboard.writeText(issuedInvite); setInviteCopied(true); }
+          catch { setInviteError("Select the invite link above to copy it."); }
+        }} />
         {inviteCopied && <p className="notice" role="status">Invite link copied.</p>}
         {inviteError && <p className="notice" role="alert">{inviteError}</p>}
-        <div className="dialog-actions">
-          <button type="button" className="quiet" onClick={() => inviteDialog.current?.close()}>OK</button>
-          <button type="button" className="primary invite-copy" onClick={async () => {
-            setInviteError("");
-            try { await navigator.clipboard.writeText(issuedInvite); setInviteCopied(true); }
-            catch { setInviteError("Select the invite link above to copy it."); }
-          }}>{teammateInvite ? "Copy" : "Copy invite link"}</button>
-        </div>
-      </> : teammateInvite ? <>
+        <div className="dialog-actions"><button type="button" className="quiet" onClick={() => inviteDialog.current?.close()}>Done</button></div>
+      </> : memberInviteTitle ? <>
         {issuingInvite && <p role="status">Creating link…</p>}
         {inviteError && <p className="notice" role="alert">{inviteError}</p>}
         <div className="dialog-actions"><button type="button" className="quiet" disabled={issuingInvite} onClick={() => inviteDialog.current?.close()}>Close</button></div>
@@ -1166,15 +1208,17 @@ export default function Board({
       </form>}
     </dialog>
     <dialog ref={adoptionDialog} className="adoption-dialog" aria-labelledby="adoption-title">
-      <h2 id="adoption-title">Alliances</h2>
+      <h2 id="adoption-title"><NetworkIcon /> Alliances</h2>
+      <div className="team-actions"><button type="button" className="primary" disabled={!roster?.viewer || issuingInvite} onClick={openTeamInvite}>Invite a new team</button></div>
+      {!roster?.viewer && <p className="meta">Set your display name to invite a new team.</p>}
       {adoptionError && <p className="notice" role="alert">{adoptionError}</p>}
-      {!adoption ? !adoptionError && <p role="status">Loading alliances…</p>
+      {canManageTeams && (!adoption ? !adoptionError && <p role="status">Loading alliances…</p>
         : adoption.length ? <div className="adoption-table"><table>
           <thead><tr><th scope="col">Team</th><th scope="col">Invited by</th><th scope="col">Status</th><th scope="col">Problems</th><th scope="col">Inspirations</th><th scope="col">Tasks</th><th scope="col">Invite</th></tr></thead>
           <tbody>{adoption.map(row => <tr key={row.number}><th scope="row">{row.name} <span className="meta">#{row.number}</span></th><td>{row.invitedBy}</td><td>{row.claimed ? "Joined" : "Invited"}</td><td>{row.problems}</td><td>{row.inspirations}</td><td>{row.tasks}</td><td>
             {row.claimed ? <span className="meta">Claimed</span> : <button type="button" className="quiet small" disabled={copying} aria-label={`Copy invite for ${row.name}`} onClick={() => void copyInvite(row.number)}>Copy invite</button>}
           </td></tr>)}</tbody>
-        </table></div> : <p>No teams invited yet.</p>}
+        </table></div> : <p>No teams invited yet.</p>)}
       <div className="dialog-actions"><button type="button" className="quiet" onClick={() => adoptionDialog.current?.close()}>Close</button></div>
     </dialog>
     <dialog ref={assignmentDialog} aria-labelledby="assignment-title" onCancel={e => {e.preventDefault(); if (!pendingTodo) setAssignment(undefined);}}>

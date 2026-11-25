@@ -267,3 +267,28 @@ select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .header-tools details summary{min-height:44px}
   .workshop-menu:has(details[open]){padding-bottom:100px}
 }
+
+.team-panels, .team-list { display: grid; gap: 1rem; }
+.team-list { list-style: none; margin: 0; padding: 0; gap: 0; }
+.team-list > li { border-top: 1px solid var(--line, #383733); padding: 0.85rem 0; }
+.team-list > li:first-child { margin-top: 0.65rem; }
+.team-list > li:last-child { padding-bottom: 0; }
+.team-row, .team-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; }
+.team-row { justify-content: space-between; gap: 0.75rem; overflow-wrap: anywhere; }
+.team-row > div:first-child { min-width: 0; }
+.team-add { justify-content: start; align-items: end; margin-top: 0.85rem; }
+.team-add label { flex: 0 1 18rem; margin: 0; }
+.team-row form, .team-match { margin: 0; }
+.team-match select { display: block; }
+.team-danger { color: #ffa69c; }
+.tabs .team-badge, .mobile-menu-toggle .team-badge { display: inline-block; margin-inline-start: 0.45rem; padding: 0.05rem 0.4rem; border-radius: 1rem; background: #ff8416; color: #211408; font-size: 0.75rem; font-weight: 800; }
+.mobile-menu-toggle { position: relative; }
+.mobile-menu-toggle .team-badge { position: absolute; top: -0.25rem; right: -0.25rem; }
+.invite-sharing { margin-top: 0.75rem; }
+.invite-sharing a { text-decoration: none; }
+.invite-qr { display: block; width: min(100%, 280px); height: auto; margin: 1rem auto 0; }
+.pages-invite + .pages-invite { margin-top: 1rem; }
+.adoption-dialog > .team-actions { margin: 0.8rem 0; }
+.pages-invite select, .team-match select { font: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); padding: 0.55rem 0.65rem; min-width: 0; max-width: 100%; }
+.pages-invite :is(select,input), .team-actions :is(button,a) { min-height: 44px; }
+.team-panels h3 { margin: 0 0 0.4rem; }

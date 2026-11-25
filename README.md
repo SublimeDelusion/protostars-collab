@@ -1,11 +1,11 @@
 # FTC Workshop
 
-The FTC collaboration site provided by FTC Team 17097, Protostars. GitHub Pages publishes the public landing page and client from `main` → `/docs`.
+A collaboration site from FTC Team 17097, Protostars. GitHub Pages serves the client from `main` → `/docs`.
 
-Share the GitHub Pages URL with `#invite=TEAM_INVITE_CODE` appended. The backend matches the invite to one team. The frontend stays on GitHub Pages and remembers access on the device.
+New teammates choose **Request access** on the Workshop landing page. A signed-in teammate approves requests from **Team**. The browser that requested access opens the board after approval. To use the same account on another device, choose **Add a device**, ask a teammate for a device invite, or submit a recovery request.
 
-Team configuration, starter JSON, and live board data are maintained on the server. Invite values are runtime secrets. Never commit team invite values or a live board export to this public repository. **Download JSON** exports the current team board from inside the app.
+**Alliances** houses invites for new teams. Invite links can be copied, shown as QR codes, or shared with the device’s email and texting apps.
 
-The request-access form is visible on the landing page. Email delivery is pending a recipient and delivery service.
+Live board data is maintained on the server. Keep invite links, session credentials, and live board exports out of this public repository. **Download JSON** exports the current team board from inside the app.
 
 Rebuild the frontend with `npm install` and `npm run build`.

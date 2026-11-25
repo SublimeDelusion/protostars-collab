@@ -66,3 +66,38 @@ export const teamShareSettings = sqliteTable("team_share_settings", {
   team: text().primaryKey(),
   legacySessionHash: text("legacy_session_hash"),
 });
+
+export const teamMembers = sqliteTable("team_members", {
+  id: text().primaryKey().notNull(),
+  team: text().notNull(),
+  nameKey: text("name_key").notNull(),
+  name: text().notNull(),
+  state: text({ enum: ["invited", "active", "removed"] }).notNull(),
+  removalBy: text("removal_by"),
+  removalUntil: integer("removal_until"),
+}, table => [uniqueIndex("team_member_name").on(table.team, table.nameKey)]);
+
+export const memberSessions = sqliteTable("member_sessions", {
+  tokenHash: text("token_hash").primaryKey().notNull(),
+  memberId: text("member_id").notNull().references(() => teamMembers.id),
+});
+
+export const accessRequests = sqliteTable("access_requests", {
+  tokenHash: text("token_hash").primaryKey().notNull(),
+  id: text().notNull().unique(),
+  team: text().notNull(),
+  name: text().notNull(),
+  nameKey: text("name_key").notNull(),
+  email: text(),
+  existing: integer({ mode: "boolean" }).notNull(),
+  state: text({ enum: ["pending", "approved", "declined"] }).notNull(),
+  created: integer().notNull(),
+});
+
+export const memberInvites = sqliteTable("member_invites", {
+  tokenHash: text("token_hash").primaryKey().notNull(),
+  memberId: text("member_id").notNull().references(() => teamMembers.id),
+  expires: integer().notNull(),
+  kind: text({ enum: ["teammate", "device"] }).notNull(),
+  redeemedBy: text("redeemed_by"),
+});
